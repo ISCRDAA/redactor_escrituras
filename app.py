@@ -30,13 +30,126 @@ CARPETA_GENERADAS = BASE_DIR / "generadas"
 
 CAMPOS = [
     
+    
+    # ==============================
+    # VENDEDOR
+    # ==============================
+
     {
         "ruta": "vendedor.nombre",
         "pregunta": "Nombre completo del vendedor:",
         "tipo": "entry",
         "mayusculas": True,
     },
+    {
+        "ruta": "vendedor.originario",
+        "pregunta": "¿De donde es Originario el vendedor?:",
+        "tipo": "entry",
+        "mayusculas": True,
+    },
+
+     {
+        "ruta": "vendedor.vecino",
+        "pregunta": "¿De donde es Vecino el vendedor?:",
+        "tipo": "entry",
+        "mayusculas": True,
+    },
+
+     {
+        "ruta": "vendedor.domicilio",
+        "pregunta": "Ingrese su Domicilio:",
+        "tipo": "text",
+        "mayusculas": True,
+    },
+
+    {
+        "ruta": "vendedor.codigo_postal",
+        "pregunta": "Código postal del vendedor:",
+        "tipo": "entry",
+        "mayusculas": False,
+        "ayuda": "Ejemplo: 43600",
+    },
+    {
+        "ruta": "vendedor.fecha_nacimiento",
+        "pregunta": "Fecha completa de nacimiento del vendedor:",
+        "tipo": "entry",
+        "mayusculas": False,
+        "ayuda": "Ejemplo: 27 veintisiete días del mes de marzo de 1998",
+    },
+    {
+        "ruta": "vendedor.anio_nacimiento_letra",
+        "pregunta": "Año de nacimiento con letra del vendedor:",
+        "tipo": "entry",
+        "mayusculas": False,
+        "ayuda": "Ejemplo: mil novecientos noventa y ocho",
+    },
+    {
+        "ruta": "vendedor.edad_numero",
+        "pregunta": "Edad del vendedor:",
+        "tipo": "entry",
+        "mayusculas": False,
+        "ayuda": "Ejemplo: 28",
+    },
+    {
+        "ruta": "vendedor.edad_letra",
+        "pregunta": "Edad en letra del vendedor:",
+        "tipo": "entry",
+        "mayusculas": False,
+        "ayuda": "Ejemplo: veintiocho",
+    },
+    {
+        "ruta": "vendedor.estado_civil",
+        "pregunta": "Estado civil del vendedor:",
+        "tipo": "combo",
+        "opciones": [
+            "soltero"
+            "soltera",
+            "casado",
+            "casada",
+            "divorciado",
+            "divorciada",
+            "viudo",
+            "viuda",
+        ],
+        "mayusculas": False,
+    },
+    {
+        "ruta": "vendedor.ocupacion",
+        "pregunta": "Ocupación del vendedor:",
+        "tipo": "combo",
+        "opciones": [
+            "campesino",
+            "campesina",
+            "estudiante",
+            "ama de casa",
+            "abogado",
+            "pensionado",
+            "pensionada",
+            "comerciante",
+            "empleado",
+            "empleada",
+        ],
+        "mayusculas": False,
+    },
+    {
+        "ruta": "vendedor.rfc",
+        "pregunta": "Ingrese el RFC:",
+        "tipo": "entry",
+        "mayusculas": True,
+    },
+
+    {
+        "ruta": "vendedor.numero_ine",
+        "pregunta": "Ingrese el Numero de el INE:",
+        "tipo": "entry",
+        "mayusculas": True,
+    },
     
+
+    # ==============================
+    # COMPRADOR
+    # ==============================
+
     {
         "ruta": "comprador.nombre",
         "pregunta": "Nombre completo del comprador:",
@@ -44,11 +157,23 @@ CAMPOS = [
         "mayusculas": True,
     },
     {
+        "ruta": "comprador.codigo_postal",
+        "pregunta": "Código postal del comprador:",
+        "tipo": "entry",
+        "mayusculas": False,
+        "ayuda": "Ejemplo: 43600",
+    },
+
+    # ==============================
+    # INMUEBLE
+    # ==============================
+
+    {
         "ruta": "inmueble.descripcion",
         "pregunta": "Descripción completa del inmueble:",
         "tipo": "text",
         "mayusculas": True,
-        "ayuda": "Ejemplo: LA TOTALIDAD DEL PREDIO URBANO IDENTIFICADO COMO LOTE 10 DIEZ...",
+        "ayuda": "Ejemplo: DEL PREDIO URBANO IDENTIFICADO COMO LOTE 10 DIEZ...",
     },
     {
         "ruta": "inmueble.medidas_colindancias",
@@ -61,21 +186,26 @@ CAMPOS = [
         "pregunta": "Superficie total del inmueble:",
         "tipo": "entry",
         "mayusculas": False,
-        "ayuda": "Ejemplo: 197.80 ",
+        "ayuda": "Ejemplo: 197.80",
     },
     {
         "ruta": "inmueble.superficie_letra",
-        "pregunta": "Ingrese la superficie en letra:",
+        "pregunta": "Superficie en letra:",
         "tipo": "entry",
         "mayusculas": False,
         "ayuda": "Ejemplo: ciento noventa y siete metros con ochenta centímetros",
     },
+
+    # ==============================
+    # OPERACIÓN
+    # ==============================
+
     {
         "ruta": "operacion.precio",
         "pregunta": "Precio de la operación:",
         "tipo": "entry",
         "mayusculas": False,
-        "ayuda": "Ejemplo: $1,600,000.00",
+        "ayuda": "Ejemplo: 1,600,000.00",
     },
     {
         "ruta": "operacion.precio_letra",
@@ -84,79 +214,6 @@ CAMPOS = [
         "mayusculas": False,
         "ayuda": "Ejemplo: un millón seiscientos mil pesos 00/100 moneda nacional",
     },
-    {
-        "ruta":"codigo.postal_v",
-        "pregunta":"Escriba el codigo postal del vendedor :",
-        "tipo":"entry",
-        "mayusculas": False,
-        "ayuda": "43600"
-
-    },
-    {
-        "ruta":"codigo.postal_c",
-        "pregunta":"Escriba el codigo postal del comprador :",
-        "tipo":"entry",
-        "mayusculas": False,
-        "ayuda": "43600"
-
-    },
-    {
-        "ruta": "fecha.nacimiento_v",
-        "pregunta": "Fecha completa de naciemiento del vendedor :",
-        "tipo": "entry",
-        "mayusculas": False,
-        "ayuda": "Ejemplo: 27 veintisiete días del mes de marzo de 2026 dos mil veintiséis",
-    },
-    {
-        "ruta": "ano.letra",
-        "pregunta": "Año con letra del vendedor:",
-        "tipo": "entry",
-        "mayusculas": False,
-        "ayuda": "Ejemplo: Mil novecientos noventa y ocho",
-    },
-    {
-        "ruta": "edad.numero",
-        "pregunta": "Edad del vendedor :",
-        "tipo": "entry",
-        "mayusculas": False,
-        "ayuda": "Ejemplo: 28",
-    },
-    {
-        "ruta": "edad.letra",
-        "pregunta": "Edad en letra del vendedor :",
-        "tipo": "entry",
-        "mayusculas": False,
-        "ayuda": "Ejemplo: Venti y ocho",
-    },
-    {
-        "ruta": "estado.civil_v",
-        "pregunta": "Estado civil del vendedor:",
-        "tipo": "combo",
-        "opciones": [
-            "soltero",
-            "casado",
-            "divorciado",
-            "viudo",
-        ],
-        "mayusculas": False,
-    },
-    {
-        "ruta": "ocupacion.vendedor",
-        "pregunta": "Ocupacion del vendedor:",
-        "tipo": "combo",
-        "opciones": [
-            "Campesino",
-            "Estudiante",
-            "Ama de casa",
-            "Abogado",
-            "Pensionado",
-            
-        ],
-        "mayusculas": False,
-    },
-
-
-    
 ]
 
 
