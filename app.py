@@ -9,6 +9,8 @@ from tkinter import (
     Frame,
     messagebox,
     Spinbox,
+    Canvas,
+    Scrollbar,
 )
 from tkinter import ttk
 from docxtpl import DocxTemplate, Listing
@@ -22,6 +24,25 @@ BASE_DIR = Path(__file__).resolve().parent
 
 RUTA_PLANTILLA = BASE_DIR / "plantilla.docx"
 CARPETA_GENERADAS = BASE_DIR / "generadas"
+
+# ==============================
+# ESTILO VISUAL
+# ==============================
+
+COLOR_FONDO = "#f3f4f6"
+COLOR_TARJETA = "#ffffff"
+COLOR_TEXTO = "#111827"
+COLOR_TEXTO_SECUNDARIO = "#6b7280"
+COLOR_PRIMARIO = "#1f4e79"
+COLOR_PRIMARIO_OSCURO = "#15395a"
+COLOR_BORDE = "#d1d5db"
+
+FUENTE_TITULO = ("Segoe UI", 22, "bold")
+FUENTE_SUBTITULO = ("Segoe UI", 11)
+FUENTE_PREGUNTA = ("Segoe UI", 16, "bold")
+FUENTE_NORMAL = ("Segoe UI", 12)
+FUENTE_INPUT = ("Segoe UI", 16)
+FUENTE_BOTON = ("Segoe UI", 12, "bold")
 
 
 # ==============================
@@ -57,7 +78,7 @@ CAMPOS = [
 
      {
         "ruta": "vendedor.domicilio",
-        "pregunta": "Ingrese su Domicilio:",
+        "pregunta": "Ingrese su Domicilio del vendedor:",
         "tipo": "text",
         "mayusculas": True,
     },
@@ -102,7 +123,7 @@ CAMPOS = [
         "pregunta": "Estado civil del vendedor:",
         "tipo": "combo",
         "opciones": [
-            "soltero"
+            "soltero",
             "soltera",
             "casado",
             "casada",
@@ -137,12 +158,18 @@ CAMPOS = [
         "tipo": "entry",
         "mayusculas": True,
     },
+    {
+        "ruta": "vendedor.curp",
+        "pregunta": "Ingrese el CURP:",
+        "tipo": "entry",
+        "mayusculas": True,
+    },
 
     {
         "ruta": "vendedor.numero_ine",
         "pregunta": "Ingrese el Numero de el INE:",
         "tipo": "entry",
-        "mayusculas": True,
+        "mayusculas": False,
     },
     
 
@@ -157,11 +184,113 @@ CAMPOS = [
         "mayusculas": True,
     },
     {
+        "ruta": "comprador.originario",
+        "pregunta": "¿De donde es Originario el comprador? :",
+        "tipo": "entry",
+        "mayusculas": True,
+    },
+
+     {
+        "ruta": "comprador.vecino",
+        "pregunta": "¿De donde es Vecino el comprador?:",
+        "tipo": "entry",
+        "mayusculas": True,
+    },
+
+     {
+        "ruta": "comprador.domicilio",
+        "pregunta": "Ingrese su Domicilio del comprador:",
+        "tipo": "text",
+        "mayusculas": True,
+    },
+
+    {
         "ruta": "comprador.codigo_postal",
         "pregunta": "Código postal del comprador:",
         "tipo": "entry",
         "mayusculas": False,
         "ayuda": "Ejemplo: 43600",
+    },
+    {
+        "ruta": "comprador.fecha_nacimiento",
+        "pregunta": "Fecha completa de nacimiento del comprador:",
+        "tipo": "entry",
+        "mayusculas": False,
+        "ayuda": "Ejemplo: 27 veintisiete días del mes de marzo de 1998",
+    },
+    {
+        "ruta": "comprador.anio_nacimiento_letra",
+        "pregunta": "Año de nacimiento con letra del comprador:",
+        "tipo": "entry",
+        "mayusculas": False,
+        "ayuda": "Ejemplo: mil novecientos noventa y ocho",
+    },
+    {
+        "ruta": "comprador.edad_numero",
+        "pregunta": "Edad del comprador:",
+        "tipo": "entry",
+        "mayusculas": False,
+        "ayuda": "Ejemplo: 28",
+    },
+    {
+        "ruta": "comprador.edad_letra",
+        "pregunta": "Edad en letra del comprador:",
+        "tipo": "entry",
+        "mayusculas": False,
+        "ayuda": "Ejemplo: veintiocho",
+    },
+    {
+        "ruta": "comprador.estado_civil",
+        "pregunta": "Estado civil del comprador:",
+        "tipo": "combo",
+        "opciones": [
+            "soltero",
+            "soltera",
+            "casado",
+            "casada",
+            "divorciado",
+            "divorciada",
+            "viudo",
+            "viuda",
+        ],
+        "mayusculas": False,
+    },
+    {
+        "ruta": "comprador.ocupacion",
+        "pregunta": "Ocupación del comprador:",
+        "tipo": "combo",
+        "opciones": [
+            "campesino",
+            "campesina",
+            "estudiante",
+            "ama de casa",
+            "abogado",
+            "pensionado",
+            "pensionada",
+            "comerciante",
+            "empleado",
+            "empleada",
+        ],
+        "mayusculas": False,
+    },
+    {
+        "ruta": "comprador.rfc",
+        "pregunta": "Ingrese el RFC del comprador:",
+        "tipo": "entry",
+        "mayusculas": True,
+    },
+    {
+        "ruta": "comprador.curp",
+        "pregunta": "Ingrese el CURP del comprador:",
+        "tipo": "entry",
+        "mayusculas": True,
+    },
+
+    {
+        "ruta": "comprador.numero_ine",
+        "pregunta": "Ingrese el Numero de el INE del comprador:",
+        "tipo": "entry",
+        "mayusculas": False,
     },
 
     # ==============================
@@ -288,6 +417,18 @@ def limpiar_area_captura():
     for widget in frame_captura.winfo_children():
         widget.destroy()
 
+def centrar_ventana(ventana, ancho, alto):
+    """
+    Centra la ventana en la pantalla.
+    """
+
+    pantalla_ancho = ventana.winfo_screenwidth()
+    pantalla_alto = ventana.winfo_screenheight()
+
+    x = int((pantalla_ancho / 2) - (ancho / 2))
+    y = int((pantalla_alto / 2) - (alto / 2))
+
+    ventana.geometry(f"{ancho}x{alto}+{x}+{y}")
 
 # ==============================
 # FUNCIÓN ESPECIAL DE COLINDANCIAS
@@ -295,11 +436,8 @@ def limpiar_area_captura():
 
 def mostrar_captura_colindancias(campo):
     """
-    Muestra un formulario especial para capturar:
-    - cantidad de colindancias
-    - punto cardinal
-    - medida
-    - colindante
+    Captura dinámica de medidas y colindancias con scroll interno.
+    El botón queda arriba y solo la tabla tiene desplazamiento.
     """
 
     global colindancias_widgets
@@ -309,28 +447,138 @@ def mostrar_captura_colindancias(campo):
     Label(
         frame_captura,
         text=campo["pregunta"],
-        font=("Arial", 16, "bold"),
-        wraplength=850,
+        font=FUENTE_PREGUNTA,
+        bg=COLOR_TARJETA,
+        fg=COLOR_TEXTO,
+        wraplength=1100,
         justify="left"
-    ).pack(pady=(10, 8))
+    ).pack(pady=(5, 8), anchor="w")
 
     Label(
         frame_captura,
         text="Primero indica cuántas colindancias tiene el inmueble.",
-        font=("Arial", 11)
-    ).pack()
+        font=FUENTE_NORMAL,
+        bg=COLOR_TARJETA,
+        fg=COLOR_TEXTO,
+    ).pack(pady=(0, 5))
 
     spin_cantidad = Spinbox(
         frame_captura,
         from_=1,
         to=20,
-        width=10,
-        font=("Arial", 13)
+        width=8,
+        font=("Segoe UI", 13)
     )
-    spin_cantidad.pack(pady=8)
+    spin_cantidad.pack(pady=(0, 8))
 
-    frame_lista = Frame(frame_captura)
-    frame_lista.pack(pady=10)
+    # Botón fijo arriba
+    boton_crear = Button(
+        frame_captura,
+        text="Crear campos de colindancias",
+        font=FUENTE_BOTON,
+        bg=COLOR_PRIMARIO,
+        fg="#ffffff",
+        activebackground=COLOR_PRIMARIO_OSCURO,
+        activeforeground="#ffffff",
+        relief="flat",
+        cursor="hand2"
+    )
+    boton_crear.pack(pady=(0, 10))
+
+    # Contenedor general de la tabla
+    frame_tabla = Frame(
+        frame_captura,
+        bg="#f1f1f1"
+    )
+    frame_tabla.pack(fill="x", pady=(0, 5))
+
+    # Encabezados fijos
+    frame_encabezados = Frame(
+        frame_tabla,
+        bg="#f1f1f1"
+    )
+    frame_encabezados.pack(fill="x")
+
+    Label(
+        frame_encabezados,
+        text="Punto cardinal",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f1f1f1",
+        fg=COLOR_TEXTO,
+        width=24
+    ).grid(row=0, column=0, padx=8, pady=6)
+
+    Label(
+        frame_encabezados,
+        text="Medida",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f1f1f1",
+        fg=COLOR_TEXTO,
+        width=50
+    ).grid(row=0, column=1, padx=8, pady=6)
+
+    Label(
+        frame_encabezados,
+        text="Linda con",
+        font=("Segoe UI", 10, "bold"),
+        bg="#f1f1f1",
+        fg=COLOR_TEXTO,
+        width=58
+    ).grid(row=0, column=2, padx=8, pady=6)
+
+    # Área con scroll
+    frame_scroll = Frame(
+        frame_tabla,
+        bg="#f1f1f1"
+    )
+    frame_scroll.pack(fill="x")
+
+    canvas = Canvas(
+        frame_scroll,
+        height=270,
+        bg="#f1f1f1",
+        highlightthickness=0
+    )
+    canvas.pack(side="left", fill="x", expand=True)
+
+    scrollbar = Scrollbar(
+        frame_scroll,
+        orient="vertical",
+        command=canvas.yview
+    )
+    scrollbar.pack(side="right", fill="y")
+
+    canvas.configure(yscrollcommand=scrollbar.set)
+
+    frame_filas = Frame(
+        canvas,
+        bg="#f1f1f1"
+    )
+
+    ventana_filas = canvas.create_window(
+        (0, 0),
+        window=frame_filas,
+        anchor="nw"
+    )
+
+    def actualizar_scroll(event=None):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+        canvas.itemconfig(ventana_filas, width=canvas.winfo_width())
+
+    frame_filas.bind("<Configure>", actualizar_scroll)
+    canvas.bind("<Configure>", actualizar_scroll)
+
+    def mover_rueda(event):
+        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def activar_scroll(event):
+        canvas.bind_all("<MouseWheel>", mover_rueda)
+
+    def desactivar_scroll(event):
+        canvas.unbind_all("<MouseWheel>")
+
+    canvas.bind("<Enter>", activar_scroll)
+    canvas.bind("<Leave>", desactivar_scroll)
 
     opciones_cardinales = [
         "NORTE",
@@ -346,7 +594,7 @@ def mostrar_captura_colindancias(campo):
     ]
 
     def crear_renglones():
-        for widget in frame_lista.winfo_children():
+        for widget in frame_filas.winfo_children():
             widget.destroy()
 
         colindancias_widgets.clear()
@@ -360,47 +608,38 @@ def mostrar_captura_colindancias(campo):
             )
             return
 
-        Label(
-            frame_lista,
-            text="Punto cardinal",
-            font=("Arial", 10, "bold")
-        ).grid(row=0, column=0, padx=5, pady=5)
-
-        Label(
-            frame_lista,
-            text="Medida",
-            font=("Arial", 10, "bold")
-        ).grid(row=0, column=1, padx=5, pady=5)
-
-        Label(
-            frame_lista,
-            text="Linda con",
-            font=("Arial", 10, "bold")
-        ).grid(row=0, column=2, padx=5, pady=5)
-
         for i in range(cantidad):
             combo_punto = ttk.Combobox(
-                frame_lista,
+                frame_filas,
                 values=opciones_cardinales,
                 state="readonly",
-                width=17,
-                font=("Arial", 10)
+                width=20,
+                font=("Segoe UI", 12),
+                height=8
             )
-            combo_punto.grid(row=i + 1, column=0, padx=5, pady=4)
+            combo_punto.grid(row=i, column=0, padx=8, pady=5, ipady=5)
 
             entrada_medida = Entry(
-                frame_lista,
-                width=38,
-                font=("Arial", 10)
+                frame_filas,
+                width=48,
+                font=("Segoe UI", 12),
+                bg="#ffffff",
+                fg=COLOR_TEXTO,
+                relief="solid",
+                bd=1
             )
-            entrada_medida.grid(row=i + 1, column=1, padx=5, pady=4)
+            entrada_medida.grid(row=i, column=1, padx=8, pady=5, ipady=6)
 
             entrada_colinda = Entry(
-                frame_lista,
-                width=48,
-                font=("Arial", 10)
+                frame_filas,
+                width=58,
+                font=("Segoe UI", 12),
+                bg="#ffffff",
+                fg=COLOR_TEXTO,
+                relief="solid",
+                bd=1
             )
-            entrada_colinda.grid(row=i + 1, column=2, padx=5, pady=4)
+            entrada_colinda.grid(row=i, column=2, padx=8, pady=5, ipady=6)
 
             colindancias_widgets.append({
                 "punto": combo_punto,
@@ -408,24 +647,85 @@ def mostrar_captura_colindancias(campo):
                 "colinda": entrada_colinda
             })
 
-    Button(
-        frame_captura,
-        text="Crear campos de colindancias",
-        font=("Arial", 11, "bold"),
-        command=crear_renglones
-    ).pack(pady=8)
+        actualizar_scroll()
+
+    boton_crear.config(command=crear_renglones)
 
     Label(
         frame_captura,
         text="Ejemplo de medida: (20.00) veinte metros con cero centímetros",
-        font=("Arial", 10),
-        fg="gray"
+        font=("Segoe UI", 10),
+        bg=COLOR_TARJETA,
+        fg=COLOR_TEXTO_SECUNDARIO
     ).pack(pady=(5, 0))
+
+def medir_ancho_visual(texto):
+    """
+    Calcula un ancho aproximado del texto.
+    Sirve mejor que len(), porque algunas letras ocupan más espacio que otras.
+    """
+
+    angostas = "ilI.,;:'|! "
+    anchas = "MWÁÉÍÓÚÑÜ@#%&"
+
+    ancho = 0
+
+    for caracter in texto:
+        if caracter in angostas:
+            ancho += 0.45
+        elif caracter in anchas:
+            ancho += 1.35
+        else:
+            ancho += 1.0
+
+    return ancho
+
+
+def medir_ancho_visual(texto):
+    """
+    Calcula un ancho aproximado del texto.
+    Sirve mejor que len(), porque algunas letras ocupan más espacio que otras.
+    """
+
+    angostas = "ilI.,;:'|! "
+    anchas = "MWÁÉÍÓÚÑÜ@#%&"
+
+    ancho = 0
+
+    for caracter in texto:
+        if caracter in angostas:
+            ancho += 0.45
+        elif caracter in anchas:
+            ancho += 1.35
+        else:
+            ancho += 1.0
+
+    return ancho
+
+
+def rellenar_con_guiones(texto, ancho_linea=155):
+    """
+    Rellena el espacio sobrante con guiones notariales.
+    Ajusta ancho_linea si se pasa o queda corto.
+    """
+
+    texto = texto.strip()
+    ancho_texto = medir_ancho_visual(texto)
+
+    if ancho_texto >= ancho_linea:
+        return texto
+
+    faltante = int(ancho_linea - ancho_texto)
+
+    relleno = " " + ("- " * max(1, faltante // 2))
+
+    return texto + relleno
 
 
 def obtener_colindancias():
     """
     Toma todos los renglones de colindancias y arma el texto jurídico.
+    Si queda espacio en blanco, lo rellena con guiones.
     """
 
     if not colindancias_widgets:
@@ -441,12 +741,14 @@ def obtener_colindancias():
         if not punto or not medida or not colinda:
             return ""
 
-        linea = f"AL {punto}: En {medida}, linda con {colinda}."
+        texto_base = f"AL {punto}: En {medida}, linda con {colinda}."
+
+        linea = rellenar_con_guiones(texto_base, ancho_linea=170)
+
         lineas.append(linea)
 
     texto_final = "\n".join(lineas)
 
-    # Listing ayuda a que Word respete los saltos de línea.
     return Listing(texto_final)
 
 
@@ -469,8 +771,17 @@ def mostrar_campo():
     campo_actual_tipo = campo["tipo"]
     valor_guardado = obtener_de_diccionario(campo["ruta"])
 
+    total = len(CAMPOS)
+    progreso = int(((indice_actual + 1) / total) * 100)
+
     label_contador.config(
-        text=f"Campo {indice_actual + 1} de {len(CAMPOS)}"
+        text=f"Campo {indice_actual + 1} de {total}"
+    )
+
+    barra_progreso["value"] = progreso
+
+    label_ruta.config(
+        text=f"Variable: {{{{ {campo['ruta']} }}}}"
     )
 
     if indice_actual == len(CAMPOS) - 1:
@@ -485,30 +796,40 @@ def mostrar_campo():
     Label(
         frame_captura,
         text=campo["pregunta"],
-        font=("Arial", 16, "bold"),
-        wraplength=850,
+        font=FUENTE_PREGUNTA,
+        bg=COLOR_TARJETA,
+        fg=COLOR_TEXTO,
+        wraplength=1100,
         justify="left"
-    ).pack(pady=(10, 10))
+    ).pack(pady=(10, 10), anchor="w")
 
     if "ayuda" in campo:
         Label(
             frame_captura,
             text=campo["ayuda"],
-            font=("Arial", 10),
-            fg="gray",
-            wraplength=850,
+            font=("Segoe UI", 10),
+            bg=COLOR_TARJETA,
+            fg=COLOR_TEXTO_SECUNDARIO,
+            wraplength=1100,
             justify="left"
-        ).pack(pady=(0, 10))
+        ).pack(pady=(0, 12), anchor="w")
 
     if campo["tipo"] == "text":
         entrada_actual = Text(
             frame_captura,
-            width=85,
-            height=9,
-            font=("Arial", 13),
-            wrap="word"
+            width=100,
+            height=10,
+            font=FUENTE_INPUT,
+            wrap="word",
+            bg="#ffffff",
+            fg=COLOR_TEXTO,
+            insertbackground=COLOR_TEXTO,
+            relief="solid",
+            bd=1,
+            padx=12,
+            pady=12
         )
-        entrada_actual.pack(pady=10)
+        entrada_actual.pack(pady=10, fill="x")
         entrada_actual.insert("1.0", valor_guardado)
 
     elif campo["tipo"] == "combo":
@@ -516,21 +837,29 @@ def mostrar_campo():
             frame_captura,
             values=campo["opciones"],
             state="readonly",
-            width=82,
-            font=("Arial", 14)
+            width=95,
+            font=FUENTE_INPUT,
+            height=8
         )
-        entrada_actual.pack(pady=10, ipady=5)
+        entrada_actual.pack(pady=10, ipady=8, fill="x")
 
         if valor_guardado:
             entrada_actual.set(valor_guardado)
+        else:
+            entrada_actual.set("Selecciona una opción")
 
     else:
         entrada_actual = Entry(
             frame_captura,
-            width=85,
-            font=("Arial", 15)
+            width=100,
+            font=FUENTE_INPUT,
+            bg="#ffffff",
+            fg=COLOR_TEXTO,
+            insertbackground=COLOR_TEXTO,
+            relief="solid",
+            bd=1
         )
-        entrada_actual.pack(pady=10, ipady=8)
+        entrada_actual.pack(pady=10, ipady=10, fill="x")
         entrada_actual.insert(0, valor_guardado)
 
     entrada_actual.focus()
@@ -645,9 +974,8 @@ def generar_escritura():
 
         vendedor = datos.get("vendedor", {}).get("nombre", "vendedor")
         comprador = datos.get("comprador", {}).get("nombre", "comprador")
-        numero_escritura = datos.get("escritura", {}).get("numero", "sin_numero")
 
-        nombre_base = f"escritura_{numero_escritura}_{vendedor}_a_{comprador}"
+        nombre_base = f"proyecto_compraventa_{vendedor}_a_{comprador}"
         nombre_base = limpiar_nombre_archivo(nombre_base)
 
         fecha_archivo = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -671,56 +999,183 @@ def generar_escritura():
         )
 
 
+
+def configurar_estilos():
+    """
+    Configura estilos visuales para ttk.
+    """
+
+    estilo = ttk.Style()
+
+    try:
+        estilo.theme_use("clam")
+    except Exception:
+        pass
+
+    estilo.configure(
+        "TCombobox",
+        fieldbackground="#ffffff",
+        background="#ffffff",
+        foreground=COLOR_TEXTO,
+        arrowcolor=COLOR_PRIMARIO,
+        bordercolor=COLOR_BORDE,
+        lightcolor=COLOR_BORDE,
+        darkcolor=COLOR_BORDE,
+        padding=8,
+        font=FUENTE_INPUT,
+    )
+
+    estilo.map(
+        "TCombobox",
+        fieldbackground=[("readonly", "#ffffff")],
+        background=[("readonly", "#ffffff")],
+        foreground=[("readonly", COLOR_TEXTO)],
+        bordercolor=[("focus", COLOR_PRIMARIO)],
+    )
+
+    estilo.configure(
+        "Horizontal.TProgressbar",
+        troughcolor="#e5e7eb",
+        background=COLOR_PRIMARIO,
+        bordercolor="#e5e7eb",
+        lightcolor=COLOR_PRIMARIO,
+        darkcolor=COLOR_PRIMARIO,
+    )
 # ==============================
 # VENTANA PRINCIPAL
 # ==============================
 
 ventana = Tk()
 ventana.title("Redactor de Escrituras")
-ventana.geometry("980x620")
+ventana.configure(bg=COLOR_FONDO)
 ventana.resizable(False, False)
 
-Label(
+centrar_ventana(ventana, 1250, 760)
+configurar_estilos()
+
+ventana.option_add("*TCombobox*Listbox.font", ("Segoe UI", 17))
+ventana.option_add("*TCombobox*Listbox.selectBackground", COLOR_PRIMARIO)
+ventana.option_add("*TCombobox*Listbox.selectForeground", "white")
+
+# CONTENEDOR GENERAL
+frame_principal = Frame(
     ventana,
-    text="Sistema Redactor de Escrituras",
-    font=("Arial", 21, "bold")
-).pack(pady=(18, 5))
+    bg=COLOR_FONDO
+)
+frame_principal.pack(fill="both", expand=True, padx=25, pady=20)
+
+# ENCABEZADO FIJO
+frame_header = Frame(
+    frame_principal,
+    bg=COLOR_FONDO
+)
+frame_header.pack(side="top", fill="x")
 
 Label(
-    ventana,
-    text="Captura guiada de datos para escritura",
-    font=("Arial", 11)
-).pack(pady=(0, 8))
+    frame_header,
+    text="Sistema Redactor de Escrituras",
+    font=FUENTE_TITULO,
+    bg=COLOR_FONDO,
+    fg=COLOR_TEXTO
+).pack(anchor="w")
+
+Label(
+    frame_header,
+    text="Captura guiada de datos para escritura pública",
+    font=FUENTE_SUBTITULO,
+    bg=COLOR_FONDO,
+    fg=COLOR_TEXTO_SECUNDARIO
+).pack(anchor="w", pady=(3, 14))
+
+# PROGRESO FIJO
+frame_progreso = Frame(
+    frame_principal,
+    bg=COLOR_FONDO
+)
+frame_progreso.pack(side="top", fill="x", pady=(0, 14))
 
 label_contador = Label(
-    ventana,
+    frame_progreso,
     text="",
-    font=("Arial", 12, "bold")
+    font=("Segoe UI", 11, "bold"),
+    bg=COLOR_FONDO,
+    fg=COLOR_PRIMARIO
 )
-label_contador.pack()
+label_contador.pack(anchor="w")
 
-frame_captura = Frame(ventana)
-frame_captura.pack(pady=10)
+barra_progreso = ttk.Progressbar(
+    frame_progreso,
+    orient="horizontal",
+    mode="determinate",
+    maximum=100,
+    style="Horizontal.TProgressbar"
+)
+barra_progreso.pack(fill="x", pady=(5, 0))
 
-frame_botones = Frame(ventana)
-frame_botones.pack(pady=18)
+# BOTONES FIJOS ABAJO
+frame_botones = Frame(
+    frame_principal,
+    bg=COLOR_FONDO,
+    height=60
+)
+frame_botones.pack(side="bottom", fill="x", pady=(15, 0))
+frame_botones.pack_propagate(False)
 
-Button(
+boton_regresar = Button(
     frame_botones,
-    text="Regresar",
-    font=("Arial", 13),
+    text="← Regresar",
+    font=FUENTE_BOTON,
     width=18,
+    bg="#e5e7eb",
+    fg=COLOR_TEXTO,
+    activebackground="#d1d5db",
+    activeforeground=COLOR_TEXTO,
+    relief="flat",
+    cursor="hand2",
     command=regresar
-).grid(row=0, column=0, padx=10)
+)
+boton_regresar.pack(side="left", pady=8)
 
 boton_siguiente = Button(
     frame_botones,
-    text="Siguiente",
-    font=("Arial", 13, "bold"),
-    width=18,
+    text="Siguiente →",
+    font=FUENTE_BOTON,
+    width=20,
+    bg=COLOR_PRIMARIO,
+    fg="#ffffff",
+    activebackground=COLOR_PRIMARIO_OSCURO,
+    activeforeground="#ffffff",
+    relief="flat",
+    cursor="hand2",
     command=siguiente
 )
-boton_siguiente.grid(row=0, column=1, padx=10)
+boton_siguiente.pack(side="right", pady=8)
+
+# TARJETA DE CAPTURA CON ALTURA FIJA
+frame_tarjeta = Frame(
+    frame_principal,
+    bg=COLOR_TARJETA,
+    highlightbackground=COLOR_BORDE,
+    highlightthickness=1,
+    height=520
+)
+frame_tarjeta.pack(side="top", fill="x")
+frame_tarjeta.pack_propagate(False)
+
+frame_captura = Frame(
+    frame_tarjeta,
+    bg=COLOR_TARJETA
+)
+frame_captura.pack(fill="both", expand=True, padx=35, pady=(25, 5))
+
+label_ruta = Label(
+    frame_tarjeta,
+    text="",
+    font=("Segoe UI", 9),
+    bg=COLOR_TARJETA,
+    fg=COLOR_TEXTO_SECUNDARIO
+)
+label_ruta.pack(anchor="w", padx=35, pady=(0, 10))
 
 mostrar_campo()
 
