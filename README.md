@@ -1,88 +1,73 @@
-# Sistema de Escrituras — Paso 7
+# Sistema de Escrituras — Formulario V13
 
-En este paso se aplica el formato de guiones notariales a todo el documento Word. El sistema conserva los tres actos configurables del Paso 6 y transforma los guiones escritos manualmente en un formato dinámico.
+Aplicación de escritorio para capturar los datos de una compraventa y generar el documento Word utilizando Microsoft Word como motor de formato.
 
-## Qué hace el formato global de guiones
+## Requisitos
 
-- separa los bloques grandes de la plantilla en párrafos reales;
-- agrega una franja breve de guiones al inicio de cada párrafo;
-- completa con guiones el espacio disponible al final;
-- evita que una línea de guiones se vaya sola al siguiente renglón;
-- centra títulos como `ANTECEDENTE`, `DATOS PERSONALES` y `DOCUMENTOS DEL APÉNDICE` entre guiones;
-- conserva las firmas sin guiones y alineadas de dos en dos;
-- adapta automáticamente el número de guiones a la longitud del texto;
-- funciona en compraventa, donación y cesión de derechos.
+- Windows 10 u 11.
+- Python 3.11 o superior.
+- Microsoft Word de escritorio instalado.
+- Word debe estar cerrado antes de generar el documento.
 
-Los guiones compactos son líderes de tabulación de Word. No se calculan contando caracteres y se ajustan al ancho real de la hoja. Cuando la última línea está casi llena, el programa agrega únicamente los guiones que caben para evitar que bajen a un renglón nuevo.
+## Primera ejecución
 
-## Actos incluidos
+1. Descomprime la carpeta.
+2. Haz doble clic en `INSTALAR_Y_EJECUTAR.bat`.
+3. El instalador crea el entorno virtual, instala las dependencias y abre el formulario.
 
-- COMPRAVENTA
-- DONACIÓN
-- CESIÓN DE DERECHOS
+En ejecuciones posteriores usa `EJECUTAR.bat`.
 
-## Archivos principales
+## Pestañas del formulario
+
+1. **Datos generales:** libro, escritura y fecha del instrumento.
+2. **Vendedor:** datos personales de la parte vendedora.
+3. **Comprador:** datos personales, sexo y calidad de la parte adquirente.
+4. **Inmueble:** descripción, superficie y datos registrales.
+5. **Antecedente y operación:** antecedente libre, avalúo, precio y declaración predial.
+6. **Colindancias:** cardinales, distintos colindantes y varios tramos por grupo.
+7. **Salida:** beneficiario del primer testimonio y nombre del Word.
+
+## Medidas y colindancias
+
+- Presiona **Agregar grupo**.
+- Selecciona el punto cardinal y el tipo de colindante.
+- Captura una medida y pulsa **Convertir** para generar la medida en letra.
+- Agrega todos los tramos del mismo colindante.
+- Guarda el grupo.
+- Repite el cardinal en otro grupo cuando cambie el colindante.
+
+## Generar Word
+
+1. Completa los campos obligatorios.
+2. Pulsa **Generar documento Word**.
+3. Elige el nombre y la ubicación.
+4. Microsoft Word abrirá la matriz, sustituirá los datos, actualizará la paginación y guardará una copia.
+
+Junto al Word se crea un archivo `*_registro.txt`. Si ocurre un error, ese archivo indica el paso exacto.
+
+## Borradores
+
+- **Guardar borrador:** conserva la captura en formato JSON.
+- **Cargar borrador:** recupera una captura anterior, incluidas las colindancias.
+
+## Estructura
 
 ```text
-sistema_escrituras_paso7/
+sistema_escrituras_formulario_v13/
 ├── main.py
 ├── interfaz.py
-├── formularios.py
-├── configuracion_actos.py
-├── utilidades.py
-├── generador_word.py
-├── prueba_generacion.py
-├── crear_plantillas_paso6.py
+├── redaccion.py
+├── motor_word.py
+├── generador_base_v12.py
 ├── requirements.txt
+├── INSTALAR_Y_EJECUTAR.bat
+├── EJECUTAR.bat
 ├── plantillas/
-│   ├── plantilla_compraventa.docx
-│   ├── plantilla_donacion.docx
-│   ├── plantilla_cesion_derechos.docx
-│   └── plantilla_base_paso5.docx
+│   └── MATRIZ_COMPRAVENTA.docx
+├── borradores/
 └── salidas/
 ```
 
-## Cómo instalar
+## Alcance de esta versión
 
-Desde PowerShell, dentro de la carpeta del proyecto:
-
-```powershell
-py -m venv entorno
-```
-
-```powershell
-.\entorno\Scripts\activate
-```
-
-```powershell
-python -m pip install -r requirements.txt
-```
-
-## Cómo ejecutar
-
-```powershell
-python main.py
-```
-
-## Cómo probar la generación sin llenar el formulario
-
-```powershell
-python prueba_generacion.py
-```
-
-Se crearán tres documentos de ejemplo dentro de `salidas`.
-
-## Dónde está la lógica nueva
-
-La aplicación global de guiones se encuentra en `generador_word.py`, principalmente en estas funciones:
-
-- `_separar_bloques_manual_guiones`;
-- `_aplicar_parrafo_con_guiones`;
-- `_aplicar_titulo_con_guiones`;
-- `_aplicar_encabezado_escritura`;
-- `_es_parrafo_firma`;
-- `_espacio_ultima_linea`.
-
-## Advertencia jurídica
-
-Las cláusulas de donación y cesión de derechos son prototipos técnicos. Deben revisarse y adecuarse a la legislación aplicable, al criterio del notario y a las particularidades del acto antes de utilizarse en un instrumento definitivo.
+La V13 integra el formulario con la matriz oficial de **compraventa**. Mantiene la lógica de generación V12. En la siguiente etapa se podrá ampliar a múltiples vendedores/compradores y a otros actos jurídicos con sus propias matrices oficiales.

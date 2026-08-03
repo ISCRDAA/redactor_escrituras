@@ -1,1144 +1,671 @@
 from __future__ import annotations
 
-import tkinter as tk
-from copy import deepcopy
-from datetime import date
+import json
+import threading
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
-from typing import Any
+from typing import Any, Callable
 
-from configuracion_actos import nombres_actos, obtener_configuracion_acto
-from formularios import VentanaCompareciente, VentanaGrupoColindancia
-from generador_word import GeneradorWord
-from utilidades import (
-    construir_antecedente_propiedad,
-    construir_datos_personales,
-    construir_datos_registro,
-    construir_clausulas_acto,
-    construir_cierre_apendice,
-    construir_declaracion_predial,
-    construir_descripcion_inmueble,
-    construir_firmas,
-    construir_introduccion_acto,
-    construir_otorgamiento,
-    construir_texto_colindancias,
-    contexto_legacy_persona,
-    convertir_numero_texto,
-    fecha_notarial,
-    parsear_fecha,
-    personas_por_calidad,
-    preparar_persona,
-    resumen_grupo,
-)
+import customtkinter as ctk
+
+from motor_word import generar_escritura
+from redaccion import medida_a_letras, numero_a_letras
+
+ctk.set_appearance_mode("System")
+ctk.set_default_color_theme("blue")
+
+BASE_DIR = Path(__file__).resolve().parent
 
 
-RUTA_BASE = Path(__file__).resolve().parent
-RUTA_PLANTILLAS = RUTA_BASE / "plantillas"
-RUTA_SALIDAS = RUTA_BASE / "salidas"
+class VentanaColindancia(ctk.CTkToplevel):
+    CARDINALES = (
+        "NORTE", "SUR", "ESTE", "OESTE", "ORIENTE", "PONIENTE",
+        "NORESTE", "NOROESTE", "SURESTE", "SUROESTE",
+    )
+    TIPOS = (
+        "PROPIEDAD DE", "CALLE", "CAMINO", "CARRETERA", "ARROYO",
+        "RÍO", "BARRANCA", "PARCELA", "EJIDO", "OTRO",
+    )
+
+    def __init__(
+        self,
+        master: ctk.CTk,
+        callback: Callable[[dict[str, Any]], None],
+        datos: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(master)
+        self.callback = callback
+        self.tramos: list[dict[str, str]] = []
+        self.title("Grupo de colindancia")
+        self.geometry("820x590")
+        self.minsize(720, 520)
+        self.transient(master)
+        self.grab_set()
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        cabecera = ctk.CTkFrame(self)
+        cabecera.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 8))
+        cabecera.grid_columnconfigure((0, 1, 2), weight=1)
+
+        self.cardinal = ctk.StringVar(value="NORTE")
+        self.tipo = ctk.StringVar(value="PROPIEDAD DE")
+        self.colindante = ctk.StringVar()
+
+        self._campo_combo(cabecera, "Punto cardinal", self.cardinal, self.CARDINALES, 0)
+        self._campo_combo(cabecera, "Tipo de colindante", self.tipo, self.TIPOS, 1)
+        self._campo_entry(cabecera, "Nombre o descripción", self.colindante, 2)
+
+        cuerpo = ctk.CTkFrame(self)
+        cuerpo.grid(row=1, column=0, sticky="nsew", padx=16, pady=8)
+        cuerpo.grid_columnconfigure(0, weight=1)
+        cuerpo.grid_rowconfigure(2, weight=1)
+
+        captura = ctk.CTkFrame(cuerpo, fg_color="transparent")
+        captura.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 4))
+        captura.grid_columnconfigure(1, weight=1)
+        captura.grid_columnconfigure(3, weight=2)
+
+        ctk.CTkLabel(captura, text="Medida numérica").grid(row=0, column=0, padx=6, pady=6)
+        self.medida = ctk.StringVar()
+        ctk.CTkEntry(captura, textvariable=self.medida, width=140).grid(row=0, column=1, sticky="ew", padx=6, pady=6)
+
+        ctk.CTkLabel(captura, text="Medida en letra").grid(row=0, column=2, padx=6, pady=6)
+        self.medida_letra = ctk.StringVar()
+        ctk.CTkEntry(captura, textvariable=self.medida_letra).grid(row=0, column=3, sticky="ew", padx=6, pady=6)
+
+        ctk.CTkButton(captura, text="Convertir", width=90, command=self._convertir).grid(row=0, column=4, padx=6, pady=6)
+        ctk.CTkButton(captura, text="Agregar tramo", command=self._agregar_tramo).grid(row=0, column=5, padx=6, pady=6)
+
+        ctk.CTkLabel(cuerpo, text="Tramos capturados", font=ctk.CTkFont(size=15, weight="bold")).grid(
+            row=1, column=0, sticky="w", padx=14, pady=(8, 4)
+        )
+
+        tabla_frame = ctk.CTkFrame(cuerpo)
+        tabla_frame.grid(row=2, column=0, sticky="nsew", padx=12, pady=4)
+        tabla_frame.grid_columnconfigure(0, weight=1)
+        tabla_frame.grid_rowconfigure(0, weight=1)
+
+        self.tabla = ttk.Treeview(tabla_frame, columns=("numero", "medida", "letra"), show="headings")
+        self.tabla.heading("numero", text="#")
+        self.tabla.heading("medida", text="Medida")
+        self.tabla.heading("letra", text="Medida en letra")
+        self.tabla.column("numero", width=45, anchor="center")
+        self.tabla.column("medida", width=110, anchor="center")
+        self.tabla.column("letra", width=520)
+        self.tabla.grid(row=0, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(tabla_frame, orient="vertical", command=self.tabla.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        self.tabla.configure(yscrollcommand=scroll.set)
+
+        acciones = ctk.CTkFrame(cuerpo, fg_color="transparent")
+        acciones.grid(row=3, column=0, sticky="ew", padx=12, pady=8)
+        ctk.CTkButton(acciones, text="Eliminar tramo", fg_color="#a33", hover_color="#822", command=self._eliminar_tramo).pack(side="left")
+
+        pie = ctk.CTkFrame(self, fg_color="transparent")
+        pie.grid(row=2, column=0, sticky="ew", padx=16, pady=(8, 16))
+        ctk.CTkButton(pie, text="Cancelar", fg_color="gray45", command=self.destroy).pack(side="right", padx=6)
+        ctk.CTkButton(pie, text="Guardar grupo", command=self._guardar).pack(side="right", padx=6)
+
+        if datos:
+            self.cardinal.set(str(datos.get("cardinal", "NORTE")))
+            self.tipo.set(str(datos.get("tipo_colindante", "PROPIEDAD DE")))
+            self.colindante.set(str(datos.get("colindante", "")))
+            self.tramos = [dict(t) for t in datos.get("tramos", [])]
+            self._actualizar_tabla()
+
+    def _campo_combo(self, parent, titulo, variable, valores, columna):
+        marco = ctk.CTkFrame(parent, fg_color="transparent")
+        marco.grid(row=0, column=columna, sticky="ew", padx=8, pady=8)
+        ctk.CTkLabel(marco, text=titulo).pack(anchor="w")
+        ctk.CTkComboBox(marco, variable=variable, values=list(valores)).pack(fill="x", pady=(4, 0))
+
+    def _campo_entry(self, parent, titulo, variable, columna):
+        marco = ctk.CTkFrame(parent, fg_color="transparent")
+        marco.grid(row=0, column=columna, sticky="ew", padx=8, pady=8)
+        ctk.CTkLabel(marco, text=titulo).pack(anchor="w")
+        ctk.CTkEntry(marco, textvariable=variable).pack(fill="x", pady=(4, 0))
+
+    def _convertir(self) -> None:
+        self.medida_letra.set(medida_a_letras(self.medida.get()))
+
+    def _agregar_tramo(self) -> None:
+        medida = self.medida.get().strip()
+        if not medida:
+            messagebox.showwarning("Dato faltante", "Escribe la medida numérica.", parent=self)
+            return
+        letra = self.medida_letra.get().strip() or medida_a_letras(medida)
+        self.tramos.append({"medida": medida, "medida_letra": letra})
+        self.medida.set("")
+        self.medida_letra.set("")
+        self._actualizar_tabla()
+
+    def _eliminar_tramo(self) -> None:
+        seleccion = self.tabla.selection()
+        if not seleccion:
+            return
+        indice = int(self.tabla.item(seleccion[0], "values")[0]) - 1
+        if 0 <= indice < len(self.tramos):
+            self.tramos.pop(indice)
+            self._actualizar_tabla()
+
+    def _actualizar_tabla(self) -> None:
+        for item in self.tabla.get_children():
+            self.tabla.delete(item)
+        for indice, tramo in enumerate(self.tramos, start=1):
+            self.tabla.insert("", "end", values=(indice, tramo["medida"], tramo["medida_letra"]))
+
+    def _guardar(self) -> None:
+        if not self.colindante.get().strip():
+            messagebox.showwarning("Dato faltante", "Escribe el colindante o la descripción.", parent=self)
+            return
+        if not self.tramos:
+            messagebox.showwarning("Dato faltante", "Agrega al menos un tramo.", parent=self)
+            return
+        self.callback({
+            "cardinal": self.cardinal.get().strip().upper(),
+            "tipo_colindante": self.tipo.get().strip().upper(),
+            "colindante": self.colindante.get().strip(),
+            "tramos": self.tramos,
+        })
+        self.destroy()
 
 
-class AplicacionEscrituras(tk.Tk):
+class AplicacionEscrituras(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
-        self.title("Sistema de generación de escrituras - Paso 6")
-        self.geometry("1240x800")
-        self.minsize(1050, 680)
+        self.title("Sistema de Escrituras Notariales — Compraventa")
+        self.geometry("1280x820")
+        self.minsize(1080, 700)
+        self.colindancias: list[dict[str, Any]] = []
+        self.campos: dict[str, ctk.StringVar] = {}
+        self.booleanos: dict[str, ctk.BooleanVar] = {}
 
-        self.comparecientes: list[dict[str, Any]] = []
-        self.grupos_colindancias: list[dict[str, Any]] = []
-        self.generador = GeneradorWord(RUTA_PLANTILLAS)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
 
-        self._crear_variables()
-        self._crear_estilos()
-        self._crear_interfaz()
+        encabezado = ctk.CTkFrame(self, corner_radius=0)
+        encabezado.grid(row=0, column=0, sticky="ew")
+        encabezado.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(
+            encabezado,
+            text="Generador de Escritura de Compraventa",
+            font=ctk.CTkFont(size=22, weight="bold"),
+        ).grid(row=0, column=0, sticky="w", padx=22, pady=16)
+        ctk.CTkLabel(
+            encabezado,
+            text="Motor de formato: Microsoft Word",
+            text_color="gray65",
+        ).grid(row=0, column=1, padx=22, pady=16)
 
-    def _crear_variables(self) -> None:
-        # Datos generales de la escritura.
-        self.acto = tk.StringVar(value="COMPRAVENTA")
-        self.libro_numero = tk.StringVar(value="376")
-        self.libro_letra = tk.StringVar(value="TRESCIENTOS SETENTA Y SEIS")
-        self.escritura_numero = tk.StringVar(value="")
-        self.escritura_letra = tk.StringVar(value="")
-        self.fecha_escritura = tk.StringVar(value="27/03/2026")
-        self.ciudad = tk.StringVar(value="Tezontepec de Aldama")
-        self.estado = tk.StringVar(value="Hidalgo")
-        self.notario_nombre = tk.StringVar(value="EDÉN KHADAFFY CORNEJO GÓMEZ")
-        self.notaria_numero = tk.StringVar(value="16")
-        self.notaria_numero_letra = tk.StringVar(value="DIECISÉIS")
-        self.distrito_judicial = tk.StringVar(value="Tula de Allende, Hidalgo")
-        self.residencia_notaria = tk.StringVar(value="Tezontepec de Aldama, Hidalgo")
+        self.tabs = ctk.CTkTabview(self)
+        self.tabs.grid(row=1, column=0, sticky="nsew", padx=14, pady=12)
+        for nombre in (
+            "Datos generales", "Vendedor", "Comprador", "Inmueble",
+            "Antecedente y operación", "Colindancias", "Salida",
+        ):
+            self.tabs.add(nombre)
 
-        # Inmueble y operación.
-        self.tipo_inmueble = tk.StringVar(value="PREDIO RÚSTICO")
-        self.denominacion_inmueble = tk.StringVar()
-        self.ubicacion_inmueble = tk.StringVar()
-        self.municipio_inmueble = tk.StringVar()
-        self.estado_inmueble = tk.StringVar(value="Hidalgo")
-        self.nombre_referencia_inmueble = tk.StringVar()
-        self.descripcion_inmueble = tk.StringVar()
-        self.superficie = tk.StringVar()
-        self.superficie_letra = tk.StringVar()
-        self.unidad_superficie = tk.StringVar(value="M2")
-        self.precio = tk.StringVar()
-        self.precio_letra = tk.StringVar()
+        self._crear_generales()
+        self._crear_persona("Vendedor", "vendedor")
+        self._crear_persona("Comprador", "comprador")
+        self._crear_inmueble()
+        self._crear_antecedente_operacion()
+        self._crear_colindancias()
+        self._crear_salida()
 
-        # Antecedente de propiedad.
-        self.antecedente_documento = tk.StringVar(value="Primer Testimonio de la Escritura")
-        self.antecedente_numero = tk.StringVar()
-        self.antecedente_numero_letra = tk.StringVar()
-        self.antecedente_volumen = tk.StringVar()
-        self.antecedente_volumen_letra = tk.StringVar()
-        self.antecedente_fecha = tk.StringVar()
-        self.antecedente_autoridad = tk.StringVar()
-        self.antecedente_ubicacion_autoridad = tk.StringVar()
-        self.antecedente_acto = tk.StringVar(value="contrato de compraventa")
+        pie = ctk.CTkFrame(self, corner_radius=0)
+        pie.grid(row=2, column=0, sticky="ew")
+        pie.grid_columnconfigure(0, weight=1)
+        self.estado = ctk.StringVar(value="Listo para capturar datos.")
+        ctk.CTkLabel(pie, textvariable=self.estado).grid(row=0, column=0, sticky="w", padx=18, pady=14)
+        ctk.CTkButton(pie, text="Cargar borrador", fg_color="gray40", command=self.cargar_borrador).grid(row=0, column=1, padx=6, pady=10)
+        ctk.CTkButton(pie, text="Guardar borrador", fg_color="gray40", command=self.guardar_borrador).grid(row=0, column=2, padx=6, pady=10)
+        self.boton_generar = ctk.CTkButton(pie, text="Generar documento Word", width=210, command=self.generar)
+        self.boton_generar.grid(row=0, column=3, padx=(6, 18), pady=10)
 
-        # Datos registrales y fiscales del inmueble.
-        self.registro_oficina = tk.StringVar(value="el Registro Público de la Propiedad y del Comercio")
-        self.registro_tipo_asiento = tk.StringVar(value="Partida")
-        self.registro_numero = tk.StringVar()
-        self.registro_numero_letra = tk.StringVar()
-        self.registro_libro = tk.StringVar()
-        self.registro_libro_letra = tk.StringVar()
-        self.registro_seccion = tk.StringVar()
-        self.registro_seccion_letra = tk.StringVar()
-        self.registro_fecha = tk.StringVar()
-        self.predial_municipio = tk.StringVar()
-        self.predial_estado = tk.StringVar(value="Hidalgo")
-        self.cuenta_predial = tk.StringVar()
-        self.clave_catastral = tk.StringVar()
-        self.avaluo_valor = tk.StringVar()
-        self.avaluo_valor_letra = tk.StringVar()
+        self._cargar_valores_iniciales()
 
-        # Campos que cambian según el acto jurídico.
-        self.campo_especifico_1 = tk.StringVar()
-        self.campo_especifico_2 = tk.StringVar()
-        self.texto_config_acto = tk.StringVar()
-        self.texto_requisitos_comparecientes = tk.StringVar()
+    def _scroll(self, tab: str) -> ctk.CTkScrollableFrame:
+        frame = ctk.CTkScrollableFrame(self.tabs.tab(tab))
+        frame.pack(fill="both", expand=True, padx=8, pady=8)
+        frame.grid_columnconfigure(0, weight=1)
+        return frame
 
-        self.estado_aplicacion = tk.StringVar(
-            value="Paso 6: selecciona el acto jurídico y captura sus campos particulares."
+    def _seccion(self, parent, titulo: str, fila: int) -> ctk.CTkFrame:
+        marco = ctk.CTkFrame(parent)
+        marco.grid(row=fila, column=0, sticky="ew", padx=8, pady=8)
+        marco.grid_columnconfigure((0, 1), weight=1)
+        ctk.CTkLabel(marco, text=titulo, font=ctk.CTkFont(size=16, weight="bold")).grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=14, pady=(12, 8)
         )
+        return marco
 
-    def _crear_estilos(self) -> None:
-        estilo = ttk.Style(self)
-        estilo.configure("Titulo.TLabel", font=("Arial", 18, "bold"))
-        estilo.configure("Subtitulo.TLabel", font=("Arial", 10))
-        estilo.configure("Seccion.TLabelframe.Label", font=("Arial", 11, "bold"))
-        estilo.configure("Accion.TButton", font=("Arial", 11, "bold"), padding=9)
+    def _entry(self, parent, etiqueta: str, clave: str, fila: int, columna: int = 0, *, ancho_columnas: int = 1) -> None:
+        variable = self.campos.setdefault(clave, ctk.StringVar())
+        bloque = ctk.CTkFrame(parent, fg_color="transparent")
+        bloque.grid(row=fila, column=columna, columnspan=ancho_columnas, sticky="ew", padx=12, pady=6)
+        bloque.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(bloque, text=etiqueta).grid(row=0, column=0, sticky="w")
+        ctk.CTkEntry(bloque, textvariable=variable).grid(row=1, column=0, sticky="ew", pady=(3, 0))
 
-    def _crear_interfaz(self) -> None:
-        superior = ttk.Frame(self, padding=(18, 14, 18, 8))
-        superior.pack(fill="x")
-        ttk.Label(
-            superior,
-            text="Generador de escrituras notariales",
-            style="Titulo.TLabel",
-        ).pack(anchor="w")
-        ttk.Label(
-            superior,
+    def _combo(self, parent, etiqueta: str, clave: str, valores: list[str], fila: int, columna: int = 0) -> None:
+        variable = self.campos.setdefault(clave, ctk.StringVar())
+        bloque = ctk.CTkFrame(parent, fg_color="transparent")
+        bloque.grid(row=fila, column=columna, sticky="ew", padx=12, pady=6)
+        bloque.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(bloque, text=etiqueta).grid(row=0, column=0, sticky="w")
+        ctk.CTkComboBox(bloque, variable=variable, values=valores).grid(row=1, column=0, sticky="ew", pady=(3, 0))
+
+    def _textbox(self, parent, etiqueta: str, clave: str, fila: int, altura: int = 140) -> ctk.CTkTextbox:
+        bloque = ctk.CTkFrame(parent, fg_color="transparent")
+        bloque.grid(row=fila, column=0, columnspan=2, sticky="ew", padx=12, pady=8)
+        bloque.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(bloque, text=etiqueta).grid(row=0, column=0, sticky="w")
+        caja = ctk.CTkTextbox(bloque, height=altura, wrap="word")
+        caja.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        setattr(self, f"textbox_{clave}", caja)
+        return caja
+
+    def _crear_generales(self) -> None:
+        cont = self._scroll("Datos generales")
+        sec = self._seccion(cont, "Identificación del instrumento", 0)
+        self._entry(sec, "Número de libro", "libro_numero", 1, 0)
+        self._entry(sec, "Libro en letra", "libro_letra", 1, 1)
+        self._entry(sec, "Número de escritura", "escritura_numero", 2, 0)
+        self._entry(sec, "Escritura en letra", "escritura_letra", 2, 1)
+        self._entry(sec, "Fecha del instrumento (DD/MM/AAAA)", "fecha_instrumento", 3, 0)
+        ctk.CTkButton(sec, text="Convertir números a letra", command=self._convertir_generales).grid(row=3, column=1, padx=12, pady=(28, 6), sticky="ew")
+
+        aviso = ctk.CTkLabel(
+            cont,
             text=(
-                "Paso 6 · Actos jurídicos configurables. La aplicación selecciona "
-                "calidades, campos y plantilla según el acto."
+                "La ciudad, notaría, distrito y residencia permanecen como en la matriz oficial. "
+                "Esta primera integración se concentra en los datos variables de la compraventa."
             ),
-            style="Subtitulo.TLabel",
-        ).pack(anchor="w", pady=(2, 0))
-
-        self.cuaderno = ttk.Notebook(self)
-        self.cuaderno.pack(fill="both", expand=True, padx=18, pady=(0, 10))
-
-        self.tab_generales = ttk.Frame(self.cuaderno, padding=16)
-        self.tab_comparecientes = ttk.Frame(self.cuaderno, padding=16)
-        self.tab_inmueble = ttk.Frame(self.cuaderno, padding=16)
-        self.tab_antecedente = ttk.Frame(self.cuaderno, padding=16)
-        self.tab_colindancias = ttk.Frame(self.cuaderno, padding=16)
-
-        self.cuaderno.add(self.tab_generales, text="1. Datos generales")
-        self.cuaderno.add(self.tab_comparecientes, text="2. Comparecientes")
-        self.cuaderno.add(self.tab_inmueble, text="3. Inmueble y operación")
-        self.cuaderno.add(self.tab_antecedente, text="4. Antecedente y registro")
-        self.cuaderno.add(self.tab_colindancias, text="5. Medidas y colindancias")
-
-        self._crear_tab_generales()
-        self._crear_tab_comparecientes()
-        self._crear_tab_inmueble()
-        self._crear_tab_antecedente()
-        self._crear_tab_colindancias()
-
-        inferior = ttk.Frame(self, padding=(18, 0, 18, 14))
-        inferior.pack(fill="x")
-        inferior.columnconfigure(0, weight=1)
-        ttk.Label(inferior, textvariable=self.estado_aplicacion).grid(
-            row=0, column=0, sticky="w"
+            wraplength=900,
+            justify="left",
+            text_color="gray65",
         )
-        ttk.Button(
-            inferior,
-            text="Generar documento Word",
-            command=self._generar_documento,
-            style="Accion.TButton",
-        ).grid(row=0, column=1, sticky="e")
+        aviso.grid(row=1, column=0, sticky="w", padx=18, pady=12)
 
-        self._aplicar_configuracion_acto(inicial=True)
+    def _crear_persona(self, tab: str, prefijo: str) -> None:
+        cont = self._scroll(tab)
+        sec = self._seccion(cont, f"Datos de la parte {tab.lower()}", 0)
+        self._entry(sec, "Nombre completo", f"{prefijo}_nombre", 1, 0, ancho_columnas=2)
+        self._combo(sec, "Sexo", f"{prefijo}_sexo", ["MASCULINO", "FEMENINO"], 2, 0)
+        self._entry(sec, "Fecha de nacimiento (DD/MM/AAAA)", f"{prefijo}_fecha_nacimiento", 2, 1)
+        self._entry(sec, "Originario(a) de", f"{prefijo}_origen", 3, 0)
+        self._entry(sec, "Vecino(a) de", f"{prefijo}_vecindad", 3, 1)
+        self._entry(sec, "Domicilio", f"{prefijo}_domicilio", 4, 0)
+        self._entry(sec, "Código Postal", f"{prefijo}_codigo_postal", 4, 1)
+        self._entry(sec, "Estado civil", f"{prefijo}_estado_civil", 5, 0)
+        self._entry(sec, "Ocupación", f"{prefijo}_ocupacion", 5, 1)
+        self._entry(sec, "RFC", f"{prefijo}_rfc", 6, 0)
+        self._entry(sec, "CURP", f"{prefijo}_curp", 6, 1)
+        self._entry(sec, "Número de INE", f"{prefijo}_ine", 7, 0)
+        self._entry(sec, "Nacionalidad", f"{prefijo}_nacionalidad", 7, 1)
+        variable = self.booleanos.setdefault(f"{prefijo}_sabe_firmar", ctk.BooleanVar(value=True))
+        ctk.CTkCheckBox(sec, text="Declara saber firmar", variable=variable).grid(row=8, column=0, sticky="w", padx=14, pady=12)
 
-    def _crear_tab_generales(self) -> None:
-        tab = self.tab_generales
-        tab.columnconfigure(1, weight=1)
-        tab.columnconfigure(3, weight=1)
+    def _crear_inmueble(self) -> None:
+        cont = self._scroll("Inmueble")
+        sec = self._seccion(cont, "Descripción del inmueble", 0)
+        self._entry(sec, "Tipo de inmueble", "tipo_inmueble", 1, 0)
+        self._entry(sec, "Denominación", "denominacion", 1, 1)
+        self._entry(sec, "Ubicación o localidad", "ubicacion", 2, 0)
+        self._entry(sec, "Municipio", "municipio", 2, 1)
+        self._entry(sec, "Estado", "estado_inmueble", 3, 0)
+        self._entry(sec, "Nombre de referencia", "nombre_referencia", 3, 1)
+        self._textbox(sec, "Descripción final (opcional; si queda vacía se construye automáticamente)", "descripcion_inmueble", 4, 100)
 
-        ttk.Label(
-            tab,
-            text="Datos generales del instrumento",
-            font=("Arial", 14, "bold"),
-        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 12))
+        sup = self._seccion(cont, "Superficie y registro", 1)
+        self._entry(sup, "Superficie", "superficie", 1, 0)
+        self._combo(sup, "Unidad", "unidad_superficie", ["M2", "Ha", "M²", "OTRA"], 1, 1)
+        self._entry(sup, "Superficie en letra", "superficie_letra", 2, 0, ancho_columnas=2)
+        self._textbox(sup, "Datos de registro (redacción completa)", "datos_registro", 3, 130)
 
-        ttk.Label(tab, text="Tipo de acto:").grid(row=1, column=0, sticky="w", pady=5)
-        self.combo_acto = ttk.Combobox(
-            tab,
-            textvariable=self.acto,
-            values=nombres_actos(),
-            state="readonly",
+    def _crear_antecedente_operacion(self) -> None:
+        cont = self._scroll("Antecedente y operación")
+        ant = self._seccion(cont, "Antecedente de propiedad", 0)
+        self._textbox(ant, "Redacción libre del antecedente", "antecedente_propiedad", 1, 190)
+
+        op = self._seccion(cont, "Valores y declaraciones", 1)
+        self._entry(op, "Valor del avalúo", "avaluo", 1, 0)
+        self._entry(op, "Avalúo en letra", "avaluo_letra", 1, 1)
+        self._entry(op, "Precio de compraventa", "precio", 2, 0)
+        self._entry(op, "Precio en letra", "precio_letra", 2, 1)
+        self._textbox(op, "Declaración predial", "declaracion_predial", 3, 150)
+        ctk.CTkButton(op, text="Convertir valores a letra", command=self._convertir_valores).grid(row=4, column=0, columnspan=2, padx=12, pady=12, sticky="ew")
+
+    def _crear_colindancias(self) -> None:
+        tab = self.tabs.tab("Colindancias")
+        tab.grid_columnconfigure(0, weight=1)
+        tab.grid_rowconfigure(1, weight=1)
+        barra = ctk.CTkFrame(tab)
+        barra.grid(row=0, column=0, sticky="ew", padx=10, pady=10)
+        ctk.CTkButton(barra, text="Agregar grupo", command=self.agregar_colindancia).pack(side="left", padx=5, pady=8)
+        ctk.CTkButton(barra, text="Editar", command=self.editar_colindancia).pack(side="left", padx=5, pady=8)
+        ctk.CTkButton(barra, text="Eliminar", fg_color="#a33", hover_color="#822", command=self.eliminar_colindancia).pack(side="left", padx=5, pady=8)
+        ctk.CTkLabel(
+            barra,
+            text="Un mismo punto cardinal puede registrarse en varios grupos cuando cambia el colindante.",
+            text_color="gray65",
+        ).pack(side="right", padx=10)
+
+        marco = ctk.CTkFrame(tab)
+        marco.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
+        marco.grid_columnconfigure(0, weight=1)
+        marco.grid_rowconfigure(0, weight=1)
+        self.tabla_colindancias = ttk.Treeview(
+            marco,
+            columns=("numero", "cardinal", "tipo", "colindante", "tramos"),
+            show="headings",
         )
-        self.combo_acto.grid(row=1, column=1, sticky="ew", padx=(8, 18), pady=5)
-        self.combo_acto.bind(
-            "<<ComboboxSelected>>", lambda _evento: self._aplicar_configuracion_acto()
-        )
+        for col, titulo, ancho in (
+            ("numero", "#", 45), ("cardinal", "Cardinal", 100),
+            ("tipo", "Tipo", 135), ("colindante", "Colindante", 390),
+            ("tramos", "Tramos", 90),
+        ):
+            self.tabla_colindancias.heading(col, text=titulo)
+            self.tabla_colindancias.column(col, width=ancho, anchor="center" if col in {"numero", "cardinal", "tramos"} else "w")
+        self.tabla_colindancias.grid(row=0, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(marco, orient="vertical", command=self.tabla_colindancias.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        self.tabla_colindancias.configure(yscrollcommand=scroll.set)
+        self.tabla_colindancias.bind("<Double-1>", lambda _e: self.editar_colindancia())
 
-        ttk.Label(
-            tab,
-            textvariable=self.texto_config_acto,
-            wraplength=520,
-            foreground="#34495E",
-        ).grid(row=1, column=2, columnspan=2, sticky="w", pady=5)
+    def _crear_salida(self) -> None:
+        cont = self._scroll("Salida")
+        sec = self._seccion(cont, "Documento final", 0)
+        self._entry(sec, "Beneficiario del primer testimonio", "beneficiario_testimonio", 1, 0, ancho_columnas=2)
+        self._entry(sec, "Nombre sugerido del archivo", "nombre_salida", 2, 0, ancho_columnas=2)
+        ctk.CTkLabel(
+            sec,
+            text=(
+                "Al generar, Microsoft Word abrirá la matriz oficial, reemplazará los datos, "
+                "actualizará la paginación y guardará una copia nueva."
+            ),
+            wraplength=850,
+            justify="left",
+            text_color="gray65",
+        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=14, pady=14)
 
-        self._entrada(tab, 2, 0, "Libro número:", self.libro_numero)
-        self._entrada(tab, 2, 2, "Libro en letra:", self.libro_letra)
-        self._entrada(tab, 3, 0, "Escritura número:", self.escritura_numero)
-        self._entrada(tab, 3, 2, "Escritura en letra:", self.escritura_letra)
-        self._entrada(tab, 4, 0, "Fecha de escritura:", self.fecha_escritura)
-        ttk.Label(
-            tab,
-            text="Formato DD/MM/AAAA. El número de escritura puede quedar vacío.",
-            foreground="#555555",
-        ).grid(row=4, column=2, columnspan=2, sticky="w", pady=5)
-        self._entrada(tab, 5, 0, "Ciudad:", self.ciudad)
-        self._entrada(tab, 5, 2, "Estado:", self.estado)
-
-        separador = ttk.Separator(tab, orient="horizontal")
-        separador.grid(row=6, column=0, columnspan=4, sticky="ew", pady=16)
-
-        ttk.Label(
-            tab,
-            text="Datos del notario",
-            font=("Arial", 13, "bold"),
-        ).grid(row=7, column=0, columnspan=4, sticky="w", pady=(0, 8))
-
-        self._entrada(tab, 8, 0, "Nombre del notario:", self.notario_nombre, columnas=3)
-        self._entrada(tab, 9, 0, "Notaría número:", self.notaria_numero)
-        self._entrada(tab, 9, 2, "Número en letra:", self.notaria_numero_letra)
-        self._entrada(tab, 10, 0, "Distrito judicial:", self.distrito_judicial, columnas=3)
-        self._entrada(tab, 11, 0, "Residencia:", self.residencia_notaria, columnas=3)
-
-        ttk.Button(
-            tab,
-            text="Completar números en letra",
-            command=self._completar_numeros_en_letra,
-        ).grid(row=12, column=3, sticky="e", pady=(18, 0))
-
-    def _entrada(
-        self,
-        padre: ttk.Frame,
-        fila: int,
-        columna: int,
-        etiqueta: str,
-        variable: tk.StringVar,
-        columnas: int = 1,
-    ) -> None:
-        ttk.Label(padre, text=etiqueta).grid(
-            row=fila, column=columna, sticky="w", pady=5
-        )
-        ttk.Entry(padre, textvariable=variable).grid(
-            row=fila,
-            column=columna + 1,
-            columnspan=columnas,
-            sticky="ew",
-            padx=(8, 18 if columnas == 1 and columna == 0 else 0),
-            pady=5,
-        )
-
-    def _crear_tab_comparecientes(self) -> None:
-        tab = self.tab_comparecientes
-        tab.columnconfigure(0, weight=1)
-        tab.rowconfigure(2, weight=1)
-
-        ttk.Label(
-            tab,
-            text="Comparecientes",
-            font=("Arial", 14, "bold"),
-        ).grid(row=0, column=0, sticky="w")
-        ttk.Label(
-            tab,
-            textvariable=self.texto_requisitos_comparecientes,
-            wraplength=1050,
-        ).grid(row=1, column=0, sticky="w", pady=(4, 12))
-
-        columnas = ("numero", "nombre", "calidad", "sexo", "edad", "rfc", "curp")
-        self.tabla_comparecientes = ttk.Treeview(tab, columns=columnas, show="headings")
-        encabezados = {
-            "numero": "#",
-            "nombre": "Nombre",
-            "calidad": "Calidad",
-            "sexo": "Sexo",
-            "edad": "Edad",
-            "rfc": "RFC",
-            "curp": "CURP",
+    def _cargar_valores_iniciales(self) -> None:
+        valores = {
+            "libro_numero": "500", "libro_letra": "QUINIENTOS",
+            "escritura_numero": "19,900", "escritura_letra": "DIECINUEVE MIL NOVECIENTOS",
+            "fecha_instrumento": "27/03/2026",
+            "vendedor_nombre": "ÁNGEL ALONSO RODRÍGUEZ DOMÍNGUEZ",
+            "vendedor_sexo": "MASCULINO", "vendedor_fecha_nacimiento": "23/12/1998",
+            "vendedor_origen": "Tulancingo de Bravo, Estado de Hidalgo",
+            "vendedor_vecindad": "Tulancingo de Bravo, Estado de Hidalgo",
+            "vendedor_domicilio": "Doria Oriente 105", "vendedor_codigo_postal": "43600",
+            "vendedor_estado_civil": "soltero", "vendedor_ocupacion": "estudiante",
+            "vendedor_rfc": "ASDECVFRT123", "vendedor_curp": "ASDCVFRMONO1234567",
+            "vendedor_ine": "123456789000", "vendedor_nacionalidad": "mexicana",
+            "comprador_nombre": "MARIAN GARCÍA CANALES", "comprador_sexo": "FEMENINO",
+            "comprador_fecha_nacimiento": "24/01/1996",
+            "comprador_origen": "Tulancingo de Bravo, Estado de Hidalgo",
+            "comprador_vecindad": "Tulancingo de Bravo, Estado de Hidalgo",
+            "comprador_domicilio": "Corregidora 205", "comprador_codigo_postal": "43560",
+            "comprador_estado_civil": "soltera", "comprador_ocupacion": "estudiante",
+            "comprador_rfc": "QWERTYUIOP12", "comprador_curp": "ASWDERFGTBN1234ER5",
+            "comprador_ine": "1234567890999", "comprador_nacionalidad": "mexicana",
+            "tipo_inmueble": "PREDIO RÚSTICO", "denominacion": "ACOCUL",
+            "ubicacion": "MIRADOR", "municipio": "AGUA BLANCA DE ITURBIDE",
+            "estado_inmueble": "HIDALGO", "nombre_referencia": "SAN MATEO",
+            "superficie": "10,000", "unidad_superficie": "M2",
+            "superficie_letra": "DIEZ MIL METROS CUADRADOS",
+            "avaluo": "50,000.00", "avaluo_letra": "cincuenta mil",
+            "precio": "25,000.00", "precio_letra": "veinticinco mil",
+            "beneficiario_testimonio": "MARIAN GARCÍA CANALES",
+            "nombre_salida": "ESCRITURA_COMPRAVENTA.docx",
         }
-        for clave, texto in encabezados.items():
-            self.tabla_comparecientes.heading(clave, text=texto)
-        self.tabla_comparecientes.column("numero", width=45, anchor="center", stretch=False)
-        self.tabla_comparecientes.column("nombre", width=330, anchor="w")
-        self.tabla_comparecientes.column("calidad", width=125, anchor="center", stretch=False)
-        self.tabla_comparecientes.column("sexo", width=110, anchor="center", stretch=False)
-        self.tabla_comparecientes.column("edad", width=65, anchor="center", stretch=False)
-        self.tabla_comparecientes.column("rfc", width=125, anchor="center", stretch=False)
-        self.tabla_comparecientes.column("curp", width=175, anchor="center", stretch=False)
-        self.tabla_comparecientes.grid(row=2, column=0, sticky="nsew")
-        self.tabla_comparecientes.bind("<Double-1>", lambda _e: self._editar_compareciente())
+        for clave, valor in valores.items():
+            if clave in self.campos:
+                self.campos[clave].set(valor)
 
-        barra = ttk.Scrollbar(tab, orient="vertical", command=self.tabla_comparecientes.yview)
-        barra.grid(row=2, column=1, sticky="ns")
-        self.tabla_comparecientes.configure(yscrollcommand=barra.set)
-
-        acciones = ttk.Frame(tab)
-        acciones.grid(row=3, column=0, sticky="ew", pady=(10, 0))
-        ttk.Button(
-            acciones,
-            text="Agregar compareciente",
-            command=self._abrir_nuevo_compareciente,
-        ).grid(row=0, column=0, padx=(0, 8))
-        ttk.Button(
-            acciones,
-            text="Editar seleccionado",
-            command=self._editar_compareciente,
-        ).grid(row=0, column=1, padx=(0, 8))
-        ttk.Button(
-            acciones,
-            text="Eliminar seleccionado",
-            command=self._eliminar_compareciente,
-        ).grid(row=0, column=2, padx=(0, 8))
-        ttk.Button(
-            acciones,
-            text="Recalcular edades",
-            command=self._recalcular_edades,
-        ).grid(row=0, column=3)
-
-    def _crear_tab_inmueble(self) -> None:
-        tab = self.tab_inmueble
-        tab.columnconfigure(1, weight=1)
-        tab.columnconfigure(3, weight=1)
-
-        ttk.Label(
-            tab,
-            text="Identificación del inmueble y datos del acto",
-            font=("Arial", 14, "bold"),
-        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 12))
-
-        ttk.Label(tab, text="Tipo de inmueble:").grid(row=1, column=0, sticky="w", pady=5)
-        ttk.Combobox(
-            tab,
-            textvariable=self.tipo_inmueble,
-            values=(
-                "PREDIO RÚSTICO",
-                "PREDIO URBANO",
-                "TERRENO",
-                "LOTE",
-                "CASA HABITACIÓN",
-                "PARCELA",
-                "FRACCIÓN DE PREDIO",
-                "OTRO INMUEBLE",
-            ),
-        ).grid(row=1, column=1, sticky="ew", padx=(8, 18), pady=5)
-
-        self._entrada(tab, 1, 2, "Denominación:", self.denominacion_inmueble)
-        self._entrada(tab, 2, 0, "Ubicación o localidad:", self.ubicacion_inmueble)
-        self._entrada(tab, 2, 2, "Municipio:", self.municipio_inmueble)
-        self._entrada(tab, 3, 0, "Estado:", self.estado_inmueble)
-        self._entrada(tab, 3, 2, "Nombre de referencia:", self.nombre_referencia_inmueble)
-
-        ttk.Button(
-            tab,
-            text="Construir descripción",
-            command=self._construir_descripcion_inmueble,
-        ).grid(row=4, column=3, sticky="e", pady=(6, 8))
-
-        self._entrada(
-            tab,
-            5,
-            0,
-            "Descripción que irá en Word:",
-            self.descripcion_inmueble,
-            columnas=3,
+        self.textbox_antecedente_propiedad.insert(
+            "1.0",
+            "Declara el señor ÁNGEL ALONSO RODRÍGUEZ DOMÍNGUEZ, de manera expresa y bajo protesta de decir verdad, que por instrumento notarial número 8,071 ocho mil setenta y uno, libro 154 ciento cincuenta y cuatro, de fecha 03 tres de enero de 2022 dos mil veintidós, pasado ante la fe del Licenciado ALDO AMAURY VILLEGAS GARCÍA, Notario Titular de la Notaría Número 10 diez del Distrito Judicial de Tulancingo de Bravo, Hidalgo, adquirió en legítima propiedad el predio de referencia, mismo que contiene las siguientes."
         )
-        ttk.Label(
-            tab,
-            text="La descripción generada puede editarse manualmente.",
-            foreground="#555555",
-        ).grid(row=6, column=1, columnspan=3, sticky="w", pady=(0, 10))
-
-        ttk.Separator(tab, orient="horizontal").grid(
-            row=7, column=0, columnspan=4, sticky="ew", pady=12
+        self.textbox_datos_registro.insert(
+            "1.0",
+            "Dicha propiedad se encuentra inscrita ante el Registro Público de la Propiedad y del Comercio de Tulancingo de Bravo, Estado de Hidalgo, bajo Folio Real número 135627 ciento treinta y cinco mil seiscientos veintisiete, de fecha 29 veintinueve de marzo de 2022 dos mil veintidós."
         )
-
-        self._entrada(tab, 8, 0, "Superficie:", self.superficie)
-        ttk.Label(tab, text="Unidad:").grid(row=8, column=2, sticky="w", pady=5)
-        ttk.Combobox(
-            tab,
-            textvariable=self.unidad_superficie,
-            values=("M2", "Ha", "HECTÁREAS", "UNIDAD PERSONALIZADA"),
-        ).grid(row=8, column=3, sticky="ew", padx=(8, 0), pady=5)
-        self._entrada(tab, 9, 0, "Superficie en letra:", self.superficie_letra, columnas=3)
-
-        self.etiqueta_importe = ttk.Label(tab, text="Precio de la operación:")
-        self.etiqueta_importe.grid(row=10, column=0, sticky="w", pady=5)
-        ttk.Entry(tab, textvariable=self.precio).grid(
-            row=10, column=1, sticky="ew", padx=(8, 18), pady=5
+        self.textbox_declaracion_predial.insert(
+            "1.0",
+            "Finalmente declara la parte vendedora que el inmueble materia del presente contrato se encuentra inscrito a su nombre en el padrón de la propiedad raíz del Municipio de Agua Blanca de Iturbide, Estado de Hidalgo, y que a la fecha no reporta adeudo por concepto de impuesto predial, lo que acreditará con la documentación correspondiente."
         )
-        self.etiqueta_importe_letra = ttk.Label(tab, text="Precio en letra:")
-        self.etiqueta_importe_letra.grid(row=10, column=2, sticky="w", pady=5)
-        ttk.Entry(tab, textvariable=self.precio_letra).grid(
-            row=10, column=3, sticky="ew", padx=(8, 0), pady=5
-        )
-
-        self.etiqueta_campo_1 = ttk.Label(tab, text="Campo específico 1:")
-        self.etiqueta_campo_1.grid(row=11, column=0, sticky="w", pady=5)
-        self.combo_campo_1 = ttk.Combobox(tab, textvariable=self.campo_especifico_1)
-        self.combo_campo_1.grid(row=11, column=1, sticky="ew", padx=(8, 18), pady=5)
-
-        self.etiqueta_campo_2 = ttk.Label(tab, text="Campo específico 2:")
-        self.etiqueta_campo_2.grid(row=11, column=2, sticky="w", pady=5)
-        self.combo_campo_2 = ttk.Combobox(tab, textvariable=self.campo_especifico_2)
-        self.combo_campo_2.grid(row=11, column=3, sticky="ew", padx=(8, 0), pady=5)
-
-        ttk.Label(
-            tab,
-            text=(
-                "Los dos últimos campos cambian automáticamente al seleccionar "
-                "compraventa, donación o cesión de derechos."
-            ),
-            foreground="#555555",
-            wraplength=950,
-        ).grid(row=12, column=0, columnspan=4, sticky="w", pady=(8, 0))
-
-    def _construir_descripcion_inmueble(self) -> None:
-        descripcion = construir_descripcion_inmueble(
-            self.tipo_inmueble.get(),
-            self.denominacion_inmueble.get(),
-            self.ubicacion_inmueble.get(),
-            self.municipio_inmueble.get(),
-            self.estado_inmueble.get(),
-            self.nombre_referencia_inmueble.get(),
-        )
-        self.descripcion_inmueble.set(descripcion)
-        self.estado_aplicacion.set("Se construyó la descripción editable del inmueble.")
-
-    def _crear_tab_antecedente(self) -> None:
-        tab = self.tab_antecedente
-        tab.columnconfigure(0, weight=1)
-        tab.rowconfigure(1, weight=1)
-
-        ttk.Label(
-            tab,
-            text="Antecedente de propiedad, registro y situación fiscal",
-            font=("Arial", 14, "bold"),
-        ).grid(row=0, column=0, sticky="w", pady=(0, 10))
-
-        secciones = ttk.Notebook(tab)
-        secciones.grid(row=1, column=0, sticky="nsew")
-
-        titulo = ttk.Frame(secciones, padding=14)
-        registro = ttk.Frame(secciones, padding=14)
-        fiscal = ttk.Frame(secciones, padding=14)
-        secciones.add(titulo, text="Título de propiedad")
-        secciones.add(registro, text="Datos registrales")
-        secciones.add(fiscal, text="Predial y avalúo")
-
-        for marco in (titulo, registro, fiscal):
-            marco.columnconfigure(1, weight=1)
-            marco.columnconfigure(3, weight=1)
-
-        self._entrada(titulo, 0, 0, "Documento o título:", self.antecedente_documento, columnas=3)
-        self._entrada(titulo, 1, 0, "Número:", self.antecedente_numero)
-        self._entrada(titulo, 1, 2, "Número en letra:", self.antecedente_numero_letra)
-        self._entrada(titulo, 2, 0, "Volumen:", self.antecedente_volumen)
-        self._entrada(titulo, 2, 2, "Volumen en letra:", self.antecedente_volumen_letra)
-        self._entrada(titulo, 3, 0, "Fecha del título:", self.antecedente_fecha)
-        ttk.Label(titulo, text="Formato DD/MM/AAAA").grid(
-            row=3, column=2, columnspan=2, sticky="w", pady=5
-        )
-        self._entrada(titulo, 4, 0, "Fedatario o autoridad:", self.antecedente_autoridad, columnas=3)
-        self._entrada(
-            titulo,
-            5,
-            0,
-            "Lugar o jurisdicción:",
-            self.antecedente_ubicacion_autoridad,
-            columnas=3,
-        )
-        self._entrada(titulo, 6, 0, "Acto de adquisición:", self.antecedente_acto, columnas=3)
-
-        ttk.Label(
-            titulo,
-            text="Redacción libre opcional del antecedente:",
-        ).grid(row=7, column=0, columnspan=4, sticky="w", pady=(12, 4))
-        self.texto_antecedente_libre = tk.Text(
-            titulo,
-            height=7,
-            wrap="word",
-            font=("Arial", 10),
-        )
-        self.texto_antecedente_libre.grid(row=8, column=0, columnspan=4, sticky="nsew")
-        titulo.rowconfigure(8, weight=1)
-        ttk.Label(
-            titulo,
-            text=(
-                "Cuando este espacio tenga texto, se utilizará en lugar de los campos "
-                "estructurados. Es útil para contratos privados, sentencias o títulos atípicos."
-            ),
-            foreground="#555555",
-            wraplength=950,
-        ).grid(row=9, column=0, columnspan=4, sticky="w", pady=(5, 0))
-
-        ttk.Label(registro, text="Oficina registral:").grid(row=0, column=0, sticky="w", pady=5)
-        ttk.Entry(registro, textvariable=self.registro_oficina).grid(
-            row=0, column=1, columnspan=3, sticky="ew", padx=(8, 0), pady=5
-        )
-        ttk.Label(registro, text="Tipo de asiento:").grid(row=1, column=0, sticky="w", pady=5)
-        ttk.Combobox(
-            registro,
-            textvariable=self.registro_tipo_asiento,
-            values=("Partida", "Folio Real", "Inscripción", "Asiento", "Otro"),
-        ).grid(row=1, column=1, sticky="ew", padx=(8, 18), pady=5)
-        self._entrada(registro, 1, 2, "Número:", self.registro_numero)
-        self._entrada(registro, 2, 0, "Número en letra:", self.registro_numero_letra)
-        self._entrada(registro, 2, 2, "Libro:", self.registro_libro)
-        self._entrada(registro, 3, 0, "Libro en letra:", self.registro_libro_letra)
-        self._entrada(registro, 3, 2, "Sección:", self.registro_seccion)
-        self._entrada(registro, 4, 0, "Sección en letra:", self.registro_seccion_letra)
-        self._entrada(registro, 4, 2, "Fecha de inscripción:", self.registro_fecha)
-
-        self._entrada(fiscal, 0, 0, "Municipio del predial:", self.predial_municipio)
-        self._entrada(fiscal, 0, 2, "Estado:", self.predial_estado)
-        self._entrada(fiscal, 1, 0, "Cuenta predial:", self.cuenta_predial)
-        self._entrada(fiscal, 1, 2, "Clave catastral:", self.clave_catastral)
-        self._entrada(fiscal, 2, 0, "Valor de avalúo:", self.avaluo_valor)
-        self._entrada(fiscal, 2, 2, "Avalúo en letra:", self.avaluo_valor_letra)
-        ttk.Label(
-            fiscal,
-            text=(
-                "El valor de avalúo es independiente del precio pactado en la compraventa. "
-                "Puede coincidir, pero el sistema los conserva como datos separados."
-            ),
-            wraplength=950,
-            foreground="#555555",
-        ).grid(row=3, column=0, columnspan=4, sticky="w", pady=(12, 0))
-
-    def _crear_tab_colindancias(self) -> None:
-        tab = self.tab_colindancias
-        tab.columnconfigure(0, weight=1)
-        tab.rowconfigure(2, weight=1)
-
-        ttk.Label(
-            tab,
-            text="Medidas y colindancias por grupos",
-            font=("Arial", 14, "bold"),
-        ).grid(row=0, column=0, sticky="w")
-        ttk.Label(
-            tab,
-            text=(
-                "Cada grupo representa un punto cardinal, un colindante y uno o varios "
-                "tramos. Repita el cardinal cuando cambie el colindante."
-            ),
-            wraplength=1050,
-        ).grid(row=1, column=0, sticky="w", pady=(4, 12))
-
-        columnas = ("numero", "punto", "tipo", "colindante", "tramos")
-        self.tabla_grupos = ttk.Treeview(tab, columns=columnas, show="headings")
-        self.tabla_grupos.heading("numero", text="#")
-        self.tabla_grupos.heading("punto", text="Punto cardinal")
-        self.tabla_grupos.heading("tipo", text="Tipo")
-        self.tabla_grupos.heading("colindante", text="Colindante")
-        self.tabla_grupos.heading("tramos", text="Tramos")
-        self.tabla_grupos.column("numero", width=45, anchor="center", stretch=False)
-        self.tabla_grupos.column("punto", width=130, anchor="center", stretch=False)
-        self.tabla_grupos.column("tipo", width=160, anchor="center", stretch=False)
-        self.tabla_grupos.column("colindante", width=650, anchor="w")
-        self.tabla_grupos.column("tramos", width=110, anchor="center", stretch=False)
-        self.tabla_grupos.grid(row=2, column=0, sticky="nsew")
-        self.tabla_grupos.bind("<Double-1>", lambda _e: self._editar_grupo())
-
-        barra = ttk.Scrollbar(tab, orient="vertical", command=self.tabla_grupos.yview)
-        barra.grid(row=2, column=1, sticky="ns")
-        self.tabla_grupos.configure(yscrollcommand=barra.set)
-
-        acciones = ttk.Frame(tab)
-        acciones.grid(row=3, column=0, sticky="ew", pady=(10, 0))
-        ttk.Button(acciones, text="Agregar grupo", command=self._abrir_nuevo_grupo).grid(
-            row=0, column=0, padx=(0, 8)
-        )
-        ttk.Button(acciones, text="Editar seleccionado", command=self._editar_grupo).grid(
-            row=0, column=1, padx=(0, 8)
-        )
-        ttk.Button(acciones, text="Eliminar seleccionado", command=self._eliminar_grupo).grid(
-            row=0, column=2
-        )
-
-    def _configuracion_actual(self) -> dict[str, Any]:
-        return obtener_configuracion_acto(self.acto.get())
-
-    def _aplicar_configuracion_acto(self, inicial: bool = False) -> None:
-        config = self._configuracion_actual()
-        self.texto_config_acto.set(config["descripcion"])
-
-        requeridas = config["requeridas"]
-        requisitos = ", ".join(
-            f"{cantidad} {calidad}" for calidad, cantidad in requeridas.items()
-        )
-        calidades = ", ".join(config["calidades"])
-        self.texto_requisitos_comparecientes.set(
-            f"Este acto requiere como mínimo: {requisitos}. Calidades disponibles: {calidades}."
-        )
-
-        self.etiqueta_importe.configure(text=config["etiqueta_importe"])
-        self.etiqueta_importe_letra.configure(text=config["etiqueta_importe_letra"])
-
-        campo_1 = config["campo_1"]
-        campo_2 = config["campo_2"]
-        self.etiqueta_campo_1.configure(text=campo_1["etiqueta"])
-        self.etiqueta_campo_2.configure(text=campo_2["etiqueta"])
-        self.combo_campo_1.configure(values=campo_1["valores"])
-        self.combo_campo_2.configure(values=campo_2["valores"])
-
-        if inicial or not self.campo_especifico_1.get().strip():
-            self.campo_especifico_1.set(campo_1["valor_inicial"])
-        else:
-            self.campo_especifico_1.set(campo_1["valor_inicial"])
-        if inicial or not self.campo_especifico_2.get().strip():
-            self.campo_especifico_2.set(campo_2["valor_inicial"])
-        else:
-            self.campo_especifico_2.set(campo_2["valor_inicial"])
-
-        incompatibles = [
-            p for p in self.comparecientes
-            if str(p.get("calidad", "")).upper() not in config["calidades"]
-        ]
-        mensaje = f"Acto seleccionado: {self.acto.get()}. Plantilla: {config['plantilla']}."
-        if incompatibles:
-            mensaje += " Revisa las calidades de los comparecientes ya capturados."
-        self.estado_aplicacion.set(mensaje)
-
-    def _fecha_referencia(self) -> date:
-        return parsear_fecha(self.fecha_escritura.get())
-
-    def _completar_numeros_en_letra(self) -> None:
-        try:
-            if self.libro_numero.get().strip() and not self.libro_letra.get().strip():
-                self.libro_letra.set(convertir_numero_texto(self.libro_numero.get()).upper())
-            if self.escritura_numero.get().strip() and not self.escritura_letra.get().strip():
-                self.escritura_letra.set(
-                    convertir_numero_texto(self.escritura_numero.get()).upper()
-                )
-            if self.notaria_numero.get().strip() and not self.notaria_numero_letra.get().strip():
-                self.notaria_numero_letra.set(
-                    convertir_numero_texto(self.notaria_numero.get()).upper()
-                )
-        except ValueError as error:
-            messagebox.showwarning("Número incorrecto", str(error))
-            return
-        self.estado_aplicacion.set("Los números disponibles se convirtieron a letra.")
-
-    # Comparecientes -----------------------------------------------------
-    def _abrir_nuevo_compareciente(self) -> None:
-        config = self._configuracion_actual()
-        VentanaCompareciente(
-            self,
-            fecha_referencia=self._fecha_referencia,
-            al_guardar=self._agregar_compareciente,
-            calidades_permitidas=tuple(config["calidades"]),
-        )
-
-    def _agregar_compareciente(self, persona: dict[str, Any]) -> None:
-        self.comparecientes.append(persona)
-        self._actualizar_tabla_comparecientes()
-        self.estado_aplicacion.set(f"Compareciente agregado: {persona['nombre']}")
-
-    def _editar_compareciente(self) -> None:
-        seleccion = self.tabla_comparecientes.selection()
-        if not seleccion:
-            messagebox.showwarning(
-                "Sin selección",
-                "Selecciona un compareciente para editarlo.",
-            )
-            return
-        indice = int(seleccion[0])
-        config = self._configuracion_actual()
-
-        def guardar(persona: dict[str, Any]) -> None:
-            self.comparecientes[indice] = persona
-            self._actualizar_tabla_comparecientes()
-            self.estado_aplicacion.set("Se actualizó el compareciente.")
-
-        VentanaCompareciente(
-            self,
-            fecha_referencia=self._fecha_referencia,
-            al_guardar=guardar,
-            persona_existente=deepcopy(self.comparecientes[indice]),
-            calidades_permitidas=tuple(config["calidades"]),
-        )
-
-    def _eliminar_compareciente(self) -> None:
-        seleccion = self.tabla_comparecientes.selection()
-        if not seleccion:
-            messagebox.showinfo(
-                "Selecciona una persona",
-                "Selecciona el compareciente que deseas eliminar.",
-            )
-            return
-        indices = sorted(
-            (self.tabla_comparecientes.index(item) for item in seleccion), reverse=True
-        )
-        for indice in indices:
-            del self.comparecientes[indice]
-        self._actualizar_tabla_comparecientes()
-
-    def _recalcular_edades(self) -> None:
-        try:
-            referencia = self._fecha_referencia()
-            self.comparecientes = [
-                preparar_persona(persona, referencia) for persona in self.comparecientes
-            ]
-        except ValueError as error:
-            messagebox.showwarning("No se pudieron recalcular", str(error))
-            return
-        self._actualizar_tabla_comparecientes()
-        self.estado_aplicacion.set("Edades recalculadas a la fecha de la escritura.")
-
-    def _actualizar_tabla_comparecientes(self) -> None:
-        for item in self.tabla_comparecientes.get_children():
-            self.tabla_comparecientes.delete(item)
-        try:
-            referencia = self._fecha_referencia()
-        except ValueError:
-            referencia = date.today()
-
-        for numero, persona in enumerate(self.comparecientes, start=1):
-            try:
-                preparada = preparar_persona(persona, referencia)
-                edad = preparada["edad_numero"]
-            except ValueError:
-                edad = "?"
-            self.tabla_comparecientes.insert(
-                "",
-                "end",
-                values=(
-                    numero,
-                    persona.get("nombre", ""),
-                    persona.get("calidad", ""),
-                    persona.get("sexo", ""),
-                    edad,
-                    persona.get("rfc", ""),
-                    persona.get("curp", ""),
-                ),
-            )
-
-    # Colindancias -------------------------------------------------------
-    def _abrir_nuevo_grupo(self) -> None:
-        VentanaGrupoColindancia(self, self._agregar_grupo)
-
-    def _agregar_grupo(self, grupo: dict[str, Any]) -> None:
-        self.grupos_colindancias.append(grupo)
-        self._actualizar_tabla_grupos()
-
-    def _editar_grupo(self) -> None:
-        seleccion = self.tabla_grupos.selection()
-        if not seleccion:
-            messagebox.showinfo(
-                "Selecciona un grupo",
-                "Selecciona el grupo de colindancia que deseas editar.",
-            )
-            return
-        indice = self.tabla_grupos.index(seleccion[0])
-
-        def guardar(grupo: dict[str, Any]) -> None:
-            self.grupos_colindancias[indice] = grupo
-            self._actualizar_tabla_grupos()
-
-        VentanaGrupoColindancia(
-            self,
-            guardar,
-            grupo_existente=self.grupos_colindancias[indice],
-        )
-
-    def _eliminar_grupo(self) -> None:
-        seleccion = self.tabla_grupos.selection()
-        if not seleccion:
-            messagebox.showinfo(
-                "Selecciona un grupo",
-                "Selecciona el grupo de colindancia que deseas eliminar.",
-            )
-            return
-        indices = sorted((self.tabla_grupos.index(i) for i in seleccion), reverse=True)
-        for indice in indices:
-            del self.grupos_colindancias[indice]
-        self._actualizar_tabla_grupos()
-
-    def _actualizar_tabla_grupos(self) -> None:
-        for item in self.tabla_grupos.get_children():
-            self.tabla_grupos.delete(item)
-        for numero, grupo in enumerate(self.grupos_colindancias, start=1):
-            self.tabla_grupos.insert(
-                "",
-                "end",
-                values=(
-                    numero,
-                    grupo["punto"],
-                    grupo["tipo_colindante"],
-                    grupo["colindante"] or grupo["tipo_colindante"],
-                    resumen_grupo(grupo),
-                ),
-            )
-
-    # Generación ---------------------------------------------------------
-    def _validar_datos(self) -> bool:
-        try:
-            self._fecha_referencia()
-        except ValueError as error:
-            messagebox.showwarning("Fecha de escritura incorrecta", str(error))
-            self.cuaderno.select(self.tab_generales)
-            return False
-
-        generales = {
-            "Libro número": self.libro_numero.get(),
-            "Ciudad": self.ciudad.get(),
-            "Estado": self.estado.get(),
-            "Nombre del notario": self.notario_nombre.get(),
-            "Número de notaría": self.notaria_numero.get(),
-            "Distrito judicial": self.distrito_judicial.get(),
-            "Residencia": self.residencia_notaria.get(),
-        }
-        faltantes = [nombre for nombre, valor in generales.items() if not valor.strip()]
-        if faltantes:
-            messagebox.showwarning(
-                "Datos generales incompletos",
-                "Faltan:\n\n- " + "\n- ".join(faltantes),
-            )
-            self.cuaderno.select(self.tab_generales)
-            return False
-
-        config = self._configuracion_actual()
-        if not self.comparecientes:
-            messagebox.showwarning(
-                "Sin comparecientes",
-                "Agrega las partes requeridas para el acto seleccionado.",
-            )
-            self.cuaderno.select(self.tab_comparecientes)
-            return False
-
-        conteo: dict[str, int] = {}
-        incompatibles: list[str] = []
-        for persona in self.comparecientes:
-            calidad = str(persona.get("calidad", "")).strip().upper()
-            conteo[calidad] = conteo.get(calidad, 0) + 1
-            if calidad not in config["calidades"]:
-                incompatibles.append(f"{persona.get('nombre', '')}: {calidad}")
-
-        if incompatibles:
-            messagebox.showwarning(
-                "Calidades incompatibles",
-                "Estas personas tienen calidades que no corresponden al acto:\n\n- "
-                + "\n- ".join(incompatibles),
-            )
-            self.cuaderno.select(self.tab_comparecientes)
-            return False
-
-        partes_faltantes = [
-            f"{cantidad} {calidad}"
-            for calidad, cantidad in config["requeridas"].items()
-            if conteo.get(calidad, 0) < cantidad
-        ]
-        if partes_faltantes:
-            messagebox.showwarning(
-                "Partes incompletas",
-                f"El acto {self.acto.get()} necesita:\n\n- "
-                + "\n- ".join(partes_faltantes),
-            )
-            self.cuaderno.select(self.tab_comparecientes)
-            return False
-
-        inmueble = {
-            "Descripción del inmueble": self.descripcion_inmueble.get(),
-            "Superficie": self.superficie.get(),
-            "Superficie en letra": self.superficie_letra.get(),
-        }
-        if config["importe_requerido"]:
-            inmueble[config["etiqueta_importe"].rstrip(":")] = self.precio.get()
-            inmueble[config["etiqueta_importe_letra"].rstrip(":")] = self.precio_letra.get()
-        for campo in (config["campo_1"], config["campo_2"]):
-            if campo["requerido"]:
-                valor = (
-                    self.campo_especifico_1.get()
-                    if campo is config["campo_1"]
-                    else self.campo_especifico_2.get()
-                )
-                inmueble[campo["etiqueta"].rstrip(":")] = valor
-
-        faltantes = [nombre for nombre, valor in inmueble.items() if not str(valor).strip()]
-        if faltantes:
-            messagebox.showwarning(
-                "Datos del inmueble incompletos",
-                "Faltan:\n\n- " + "\n- ".join(faltantes),
-            )
-            self.cuaderno.select(self.tab_inmueble)
-            return False
-
-        texto_libre = self.texto_antecedente_libre.get("1.0", "end").strip()
-        if not texto_libre:
-            titulo_requerido = {
-                "Documento o título": self.antecedente_documento.get(),
-                "Fecha del título": self.antecedente_fecha.get(),
-                "Fedatario o autoridad": self.antecedente_autoridad.get(),
-                "Acto de adquisición": self.antecedente_acto.get(),
-            }
-            faltantes = [
-                nombre for nombre, valor in titulo_requerido.items() if not valor.strip()
-            ]
-            if faltantes:
-                messagebox.showwarning(
-                    "Antecedente incompleto",
-                    "Captura una redacción libre o completa:\n\n- " + "\n- ".join(faltantes),
-                )
-                self.cuaderno.select(self.tab_antecedente)
-                return False
-            try:
-                parsear_fecha(self.antecedente_fecha.get())
-            except ValueError as error:
-                messagebox.showwarning("Fecha del título incorrecta", str(error))
-                self.cuaderno.select(self.tab_antecedente)
-                return False
-
-        registro_requerido = {
-            "Oficina registral": self.registro_oficina.get(),
-            "Número de asiento": self.registro_numero.get(),
-            "Fecha de inscripción": self.registro_fecha.get(),
-            "Municipio del predial": self.predial_municipio.get(),
-            "Estado del predial": self.predial_estado.get(),
-            "Valor de avalúo": self.avaluo_valor.get(),
-            "Avalúo en letra": self.avaluo_valor_letra.get(),
-        }
-        if not self.cuenta_predial.get().strip() and not self.clave_catastral.get().strip():
-            registro_requerido["Cuenta predial o clave catastral"] = ""
-        faltantes = [nombre for nombre, valor in registro_requerido.items() if not valor.strip()]
-        if faltantes:
-            messagebox.showwarning(
-                "Registro o datos fiscales incompletos",
-                "Faltan:\n\n- " + "\n- ".join(faltantes),
-            )
-            self.cuaderno.select(self.tab_antecedente)
-            return False
-        try:
-            parsear_fecha(self.registro_fecha.get())
-        except ValueError as error:
-            messagebox.showwarning("Fecha registral incorrecta", str(error))
-            self.cuaderno.select(self.tab_antecedente)
-            return False
-
-        if not self.grupos_colindancias:
-            messagebox.showwarning(
-                "Sin colindancias",
-                "Agrega por lo menos un grupo de medidas y colindancias.",
-            )
-            self.cuaderno.select(self.tab_colindancias)
-            return False
-        return True
-
-    def _crear_contexto(self) -> dict[str, Any]:
-        config = self._configuracion_actual()
-        fecha = self._fecha_referencia()
-        personas = [preparar_persona(p, fecha) for p in self.comparecientes]
-        transmitentes = personas_por_calidad(personas, config["calidad_transmitente"])
-        adquirentes = personas_por_calidad(personas, config["calidad_adquirente"])
-        transmitente = transmitentes[0]
-        adquirente = adquirentes[0]
-
-        libro_letra = self.libro_letra.get().strip()
-        if not libro_letra:
-            libro_letra = convertir_numero_texto(self.libro_numero.get()).upper()
-
-        numero_escritura = self.escritura_numero.get().strip()
-        letra_escritura = self.escritura_letra.get().strip()
-        if numero_escritura and not letra_escritura:
-            letra_escritura = convertir_numero_texto(numero_escritura).upper()
-        if not numero_escritura:
-            numero_escritura = "PENDIENTE"
-            letra_escritura = "PENDIENTE DE ASIGNACIÓN"
-
-        notaria_letra = self.notaria_numero_letra.get().strip()
-        if not notaria_letra:
-            notaria_letra = convertir_numero_texto(self.notaria_numero.get()).upper()
-
-        texto_libre_antecedente = self.texto_antecedente_libre.get("1.0", "end").strip()
-        fecha_titulo_texto = ""
-        if self.antecedente_fecha.get().strip():
-            fecha_titulo_texto = fecha_notarial(
-                parsear_fecha(self.antecedente_fecha.get()), incluir_dias=False
-            )
-        antecedente_propiedad = construir_antecedente_propiedad(
+        self.colindancias = [
             {
-                "texto_libre": texto_libre_antecedente,
-                "documento": self.antecedente_documento.get(),
-                "numero": self.antecedente_numero.get(),
-                "numero_letra": self.antecedente_numero_letra.get(),
-                "volumen": self.antecedente_volumen.get(),
-                "volumen_letra": self.antecedente_volumen_letra.get(),
-                "fecha_texto": fecha_titulo_texto,
-                "autoridad": self.antecedente_autoridad.get(),
-                "ubicacion_autoridad": self.antecedente_ubicacion_autoridad.get(),
-                "acto_adquisicion": self.antecedente_acto.get(),
+                "cardinal": "NORTE",
+                "tipo_colindante": "PROPIEDAD DE",
+                "colindante": "HUGO SÁNCHEZ BORBOJA",
+                "tramos": [
+                    {"medida": "20.00", "medida_letra": "veinte metros con cero centímetros"},
+                    {"medida": "12.10", "medida_letra": "doce metros con diez centímetros"},
+                ],
             },
-            transmitentes,
-        )
-
-        fecha_registro_texto = fecha_notarial(
-            parsear_fecha(self.registro_fecha.get()), incluir_dias=False
-        )
-        datos_registro = construir_datos_registro(
             {
-                "oficina": self.registro_oficina.get(),
-                "tipo_asiento": self.registro_tipo_asiento.get(),
-                "numero": self.registro_numero.get(),
-                "numero_letra": self.registro_numero_letra.get(),
-                "libro": self.registro_libro.get(),
-                "libro_letra": self.registro_libro_letra.get(),
-                "seccion": self.registro_seccion.get(),
-                "seccion_letra": self.registro_seccion_letra.get(),
-                "fecha_texto": fecha_registro_texto,
-            }
-        )
-        declaracion_predial = construir_declaracion_predial(
-            {
-                "municipio": self.predial_municipio.get(),
-                "estado": self.predial_estado.get(),
-                "cuenta": self.cuenta_predial.get(),
-                "clave_catastral": self.clave_catastral.get(),
+                "cardinal": "SUR",
+                "tipo_colindante": "PROPIEDAD DE",
+                "colindante": "LUIS DE LA MADRID TORRES",
+                "tramos": [{"medida": "11.12", "medida_letra": "once metros con doce centímetros"}],
             },
-            denominacion_parte=config["parte_transmitente"],
-        )
+            {
+                "cardinal": "OESTE",
+                "tipo_colindante": "PROPIEDAD DE",
+                "colindante": "LUCA MENDIOLA LAGOS",
+                "tramos": [{"medida": "20.00", "medida_letra": "veinte metros con cero centímetros"}],
+            },
+            {
+                "cardinal": "NOROESTE",
+                "tipo_colindante": "PROPIEDAD DE",
+                "colindante": "LUIS ALBERTO DE LA CRUZ GÓMEZ",
+                "tramos": [
+                    {"medida": "9.80", "medida_letra": "nueve metros con ochenta centímetros"},
+                    {"medida": "11.12", "medida_letra": "once metros con doce centímetros"},
+                ],
+            },
+        ]
+        self._actualizar_colindancias()
 
-        escritura = {
-            "acto": self.acto.get().strip(),
-            "acto_titulo": config["titulo"],
-            "libro_numero": self.libro_numero.get().strip(),
-            "libro_letra": libro_letra,
-            "numero": numero_escritura,
-            "numero_letra": letra_escritura,
-            "fecha_texto": fecha_notarial(fecha),
-            "ciudad": self.ciudad.get().strip(),
-            "estado": self.estado.get().strip(),
-        }
-        notario = {
-            "nombre": self.notario_nombre.get().strip().upper(),
-            "numero": self.notaria_numero.get().strip(),
-            "numero_letra": notaria_letra,
-            "distrito": self.distrito_judicial.get().strip(),
-            "residencia": self.residencia_notaria.get().strip(),
-        }
-        inmueble = {
-            "tipo": self.tipo_inmueble.get().strip(),
-            "denominacion": self.denominacion_inmueble.get().strip(),
-            "ubicacion": self.ubicacion_inmueble.get().strip(),
-            "municipio": self.municipio_inmueble.get().strip(),
-            "estado": self.estado_inmueble.get().strip(),
-            "nombre_referencia": self.nombre_referencia_inmueble.get().strip(),
-            "descripcion": self.descripcion_inmueble.get().strip(),
-            "antecedente_propiedad": antecedente_propiedad,
-            "datos_registro": datos_registro,
-            "declaracion_predial": declaracion_predial,
-            "medidas_colindancias": construir_texto_colindancias(
-                self.grupos_colindancias
-            ),
-            "superficie": self.superficie.get().strip(),
-            "unidad_superficie": self.unidad_superficie.get().strip(),
-            "superficie_letra": self.superficie_letra.get().strip(),
-            "avaluo_valor": self.avaluo_valor.get().strip(),
-            "avaluo_valor_letra": self.avaluo_valor_letra.get().strip(),
-        }
-        operacion = {
-            "importe": self.precio.get().strip(),
-            "importe_letra": self.precio_letra.get().strip(),
-            # Alias conservados para futuras plantillas heredadas.
-            "precio": self.precio.get().strip(),
-            "precio_letra": self.precio_letra.get().strip(),
-        }
-        campos = {
-            config["campo_1"]["clave"]: self.campo_especifico_1.get().strip(),
-            config["campo_2"]["clave"]: self.campo_especifico_2.get().strip(),
-        }
+    def _convertir_generales(self) -> None:
+        self.campos["libro_letra"].set(numero_a_letras(self.campos["libro_numero"].get()))
+        self.campos["escritura_letra"].set(numero_a_letras(self.campos["escritura_numero"].get()))
 
+    def _convertir_valores(self) -> None:
+        from redaccion import cantidad_a_letras
+        self.campos["avaluo_letra"].set(cantidad_a_letras(self.campos["avaluo"].get()))
+        self.campos["precio_letra"].set(cantidad_a_letras(self.campos["precio"].get()))
+
+    def agregar_colindancia(self) -> None:
+        VentanaColindancia(self, self._guardar_nueva_colindancia)
+
+    def _guardar_nueva_colindancia(self, datos: dict[str, Any]) -> None:
+        self.colindancias.append(datos)
+        self._actualizar_colindancias()
+
+    def _indice_colindancia(self) -> int | None:
+        seleccion = self.tabla_colindancias.selection()
+        if not seleccion:
+            return None
+        return int(self.tabla_colindancias.item(seleccion[0], "values")[0]) - 1
+
+    def editar_colindancia(self) -> None:
+        indice = self._indice_colindancia()
+        if indice is None:
+            return
+        def guardar(datos: dict[str, Any]) -> None:
+            self.colindancias[indice] = datos
+            self._actualizar_colindancias()
+        VentanaColindancia(self, guardar, self.colindancias[indice])
+
+    def eliminar_colindancia(self) -> None:
+        indice = self._indice_colindancia()
+        if indice is None:
+            return
+        if messagebox.askyesno("Eliminar", "¿Eliminar este grupo de colindancia?"):
+            self.colindancias.pop(indice)
+            self._actualizar_colindancias()
+
+    def _actualizar_colindancias(self) -> None:
+        for item in self.tabla_colindancias.get_children():
+            self.tabla_colindancias.delete(item)
+        for indice, grupo in enumerate(self.colindancias, start=1):
+            self.tabla_colindancias.insert(
+                "", "end",
+                values=(indice, grupo["cardinal"], grupo["tipo_colindante"], grupo["colindante"], len(grupo["tramos"])),
+            )
+
+    def _persona(self, prefijo: str) -> dict[str, Any]:
         return {
-            "escritura": escritura,
-            "notario": notario,
-            "acto": config,
-            "introduccion_acto": construir_introduccion_acto(
-                self.acto.get(), inmueble["descripcion"]
-            ),
-            "comparecientes": personas,
-            "comparecientes_otorgamiento": construir_otorgamiento(personas),
-            "comparecientes_datos_personales": construir_datos_personales(personas),
-            "comparecientes_firmas": construir_firmas(personas),
-            "transmitente": contexto_legacy_persona(transmitente),
-            "adquirente": contexto_legacy_persona(adquirente),
-            "vendedor": contexto_legacy_persona(transmitente),
-            "comprador": contexto_legacy_persona(adquirente),
-            "inmueble": inmueble,
-            "operacion": operacion,
-            "campos_especificos": campos,
-            "clausulas_acto": construir_clausulas_acto(
-                self.acto.get(), config, personas, inmueble, operacion, campos
-            ),
-            "cierre_apendice": construir_cierre_apendice(
-                self.acto.get(), escritura, notario
-            ),
+            "nombre": self.campos[f"{prefijo}_nombre"].get(),
+            "sexo": self.campos[f"{prefijo}_sexo"].get(),
+            "fecha_nacimiento": self.campos[f"{prefijo}_fecha_nacimiento"].get(),
+            "origen": self.campos[f"{prefijo}_origen"].get(),
+            "vecindad": self.campos[f"{prefijo}_vecindad"].get(),
+            "domicilio": self.campos[f"{prefijo}_domicilio"].get(),
+            "codigo_postal": self.campos[f"{prefijo}_codigo_postal"].get(),
+            "estado_civil": self.campos[f"{prefijo}_estado_civil"].get(),
+            "ocupacion": self.campos[f"{prefijo}_ocupacion"].get(),
+            "rfc": self.campos[f"{prefijo}_rfc"].get(),
+            "curp": self.campos[f"{prefijo}_curp"].get(),
+            "ine": self.campos[f"{prefijo}_ine"].get(),
+            "nacionalidad": self.campos[f"{prefijo}_nacionalidad"].get(),
+            "sabe_firmar": self.booleanos[f"{prefijo}_sabe_firmar"].get(),
         }
 
-    def _generar_documento(self) -> None:
-        if not self._validar_datos():
+    def recopilar(self) -> dict[str, Any]:
+        datos: dict[str, Any] = {clave: variable.get() for clave, variable in self.campos.items()}
+        datos["vendedor"] = self._persona("vendedor")
+        datos["comprador"] = self._persona("comprador")
+        datos["descripcion_inmueble"] = self.textbox_descripcion_inmueble.get("1.0", "end").strip()
+        datos["antecedente_propiedad"] = self.textbox_antecedente_propiedad.get("1.0", "end").strip()
+        datos["datos_registro"] = self.textbox_datos_registro.get("1.0", "end").strip()
+        datos["declaracion_predial"] = self.textbox_declaracion_predial.get("1.0", "end").strip()
+        datos["colindancias"] = self.colindancias
+        return datos
+
+    def validar(self, datos: dict[str, Any]) -> list[str]:
+        faltantes: list[str] = []
+        requeridos = {
+            "libro_numero": "Número de libro",
+            "escritura_numero": "Número de escritura",
+            "fecha_instrumento": "Fecha del instrumento",
+            "superficie": "Superficie",
+            "datos_registro": "Datos registrales",
+            "avaluo": "Avalúo",
+            "precio": "Precio",
+        }
+        for clave, etiqueta in requeridos.items():
+            if not str(datos.get(clave, "")).strip():
+                faltantes.append(etiqueta)
+        for parte, etiqueta in (("vendedor", "Vendedor"), ("comprador", "Comprador")):
+            persona = datos[parte]
+            for clave in ("nombre", "fecha_nacimiento", "domicilio", "rfc", "curp"):
+                if not str(persona.get(clave, "")).strip():
+                    faltantes.append(f"{etiqueta}: {clave.replace('_', ' ')}")
+        if not datos["antecedente_propiedad"]:
+            faltantes.append("Antecedente de propiedad")
+        if not self.colindancias:
+            faltantes.append("Al menos una colindancia")
+        return faltantes
+
+    def guardar_borrador(self) -> None:
+        datos = self.recopilar()
+        ruta = filedialog.asksaveasfilename(
+            title="Guardar borrador",
+            initialdir=BASE_DIR / "borradores",
+            defaultextension=".json",
+            filetypes=[("Borrador JSON", "*.json")],
+        )
+        if not ruta:
+            return
+        Path(ruta).write_text(json.dumps(datos, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.estado.set(f"Borrador guardado: {Path(ruta).name}")
+
+    def cargar_borrador(self) -> None:
+        ruta = filedialog.askopenfilename(
+            title="Cargar borrador",
+            initialdir=BASE_DIR / "borradores",
+            filetypes=[("Borrador JSON", "*.json")],
+        )
+        if not ruta:
+            return
+        datos = json.loads(Path(ruta).read_text(encoding="utf-8"))
+        for clave, variable in self.campos.items():
+            if clave in datos:
+                variable.set(str(datos[clave]))
+        for prefijo in ("vendedor", "comprador"):
+            persona = datos.get(prefijo, {})
+            for clave, valor in persona.items():
+                nombre = f"{prefijo}_{clave}"
+                if nombre in self.campos:
+                    self.campos[nombre].set(str(valor))
+                elif nombre in self.booleanos:
+                    self.booleanos[nombre].set(bool(valor))
+        for clave in ("descripcion_inmueble", "antecedente_propiedad", "datos_registro", "declaracion_predial"):
+            caja = getattr(self, f"textbox_{clave}")
+            caja.delete("1.0", "end")
+            caja.insert("1.0", datos.get(clave, ""))
+        self.colindancias = datos.get("colindancias", [])
+        self._actualizar_colindancias()
+        self.estado.set(f"Borrador cargado: {Path(ruta).name}")
+
+    def generar(self) -> None:
+        datos = self.recopilar()
+        faltantes = self.validar(datos)
+        if faltantes:
+            messagebox.showwarning(
+                "Datos faltantes",
+                "Completa los siguientes datos:\n\n- " + "\n- ".join(faltantes),
+            )
             return
 
-        config = self._configuracion_actual()
-        RUTA_SALIDAS.mkdir(parents=True, exist_ok=True)
-        nombre_base = self.acto.get().lower().replace(" ", "_").replace("ó", "o")
+        nombre = self.campos["nombre_salida"].get().strip() or "ESCRITURA_COMPRAVENTA.docx"
+        if not nombre.lower().endswith(".docx"):
+            nombre += ".docx"
         ruta = filedialog.asksaveasfilename(
             title="Guardar escritura",
-            initialdir=RUTA_SALIDAS,
-            initialfile=f"escritura_{nombre_base}_paso6.docx",
+            initialdir=BASE_DIR / "salidas",
+            initialfile=nombre,
             defaultextension=".docx",
-            filetypes=[("Documento de Word", "*.docx")],
+            filetypes=[("Documento Word", "*.docx")],
         )
         if not ruta:
             return
 
-        try:
-            contexto = self._crear_contexto()
-            archivo = self.generador.generar(
-                contexto, ruta, nombre_plantilla=config["plantilla"]
-            )
-        except Exception as error:
-            messagebox.showerror(
-                "No se pudo generar",
-                f"Ocurrió un error al crear el documento:\n\n{error}",
-            )
-            return
+        self.boton_generar.configure(state="disabled", text="Generando...")
+        self.estado.set("Microsoft Word está generando el documento. No cierres Word.")
 
-        self.estado_aplicacion.set(f"Documento generado: {archivo.name}")
-        messagebox.showinfo(
-            "Documento generado",
-            f"La escritura se creó correctamente en:\n\n{archivo}",
+        def trabajo() -> None:
+            try:
+                import pythoncom
+                pythoncom.CoInitialize()
+                try:
+                    salida = generar_escritura(datos, ruta)
+                finally:
+                    pythoncom.CoUninitialize()
+                self.after(0, lambda: self._generacion_exitosa(salida))
+            except Exception as exc:
+                self.after(0, lambda error=exc: self._generacion_fallida(error))
+
+        threading.Thread(target=trabajo, daemon=True).start()
+
+    def _generacion_exitosa(self, salida: Path) -> None:
+        self.boton_generar.configure(state="normal", text="Generar documento Word")
+        self.estado.set(f"Documento generado: {salida.name}")
+        messagebox.showinfo("Documento generado", f"La escritura se guardó correctamente en:\n\n{salida}")
+
+    def _generacion_fallida(self, error: Exception) -> None:
+        self.boton_generar.configure(state="normal", text="Generar documento Word")
+        self.estado.set("No fue posible generar el documento.")
+        messagebox.showerror(
+            "Error al generar",
+            f"No fue posible generar el Word:\n\n{error}\n\n"
+            "Cierra los documentos de Word abiertos y revisa el archivo de registro junto a la salida.",
         )
